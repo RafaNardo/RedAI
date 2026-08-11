@@ -114,7 +114,7 @@ api.MapGet("/content/{id:guid}/creatives", async (Guid id, RedAIDbContext db) =>
 api.MapPost("/content/{id:guid}/creative/revise", async (Guid id, ReviseRequest request, RedAIDbContext db, JobQueue jobs) => await db.ContentItems.AnyAsync(x => x.Id == id) ? await Start(db, jobs, "creative-revision", "content", id, 1, async (sp, ct) => await ReviseCreative(sp.GetRequiredService<RedAIDbContext>(), sp.GetRequiredService<IAIClient>(), sp.GetRequiredService<IContractSchemaCatalog>(), sp.GetRequiredService<IAssetStorage>(), sp.GetRequiredService<IDeterministicCreativeRenderer>(), id, request.Instruction, ct)) : Results.NotFound());
 api.MapPost("/content/{id:guid}/creative/{versionId:guid}/select", async (Guid id, Guid versionId, RedAIDbContext db) => await SelectCreative(db, id, versionId));
 api.MapGet("/projects/{id:guid}/result", async (Guid id, RedAIDbContext db) => await db.Projects.Include(p => p.Campaign).FirstOrDefaultAsync(p => p.Id == id) is { } p ? Results.Ok(new { p.Id, p.Name, campaign = p.Campaign, status = p.Status }) : Results.NotFound());
-api.MapGet("/projects/{id:guid}/export", async (Guid id, RedAIDbContext db) => await db.Projects.Include(p => p.Campaign).FirstOrDefaultAsync(p => p.Id == id) is { Campaign: { } campaign } project ? Results.File(CreateExportZip(project, campaign, await db.ContentItems.Where(x => x.CampaignId == campaign.Id).ToListAsync(), await db.CreativeVersions.Join(db.ContentItems, v => v.ContentItemId, i => i.Id, (v, i) => new { v, i }).Where(x => x.i.CampaignId == campaign.Id).Select(x => x.v).ToListAsync()), "application/zip", $"red-ai-{id:N}.zip") : Results.NotFound());
+api.MapGet("/projects/{id:guid}/export", async (Guid id, RedAIDbContext db, IAssetStorage storage, CancellationToken ct) => await db.Projects.Include(p => p.Campaign).FirstOrDefaultAsync(p => p.Id == id, ct) is { Campaign: { } campaign } project ? Results.File(await CreateExportZip(project, campaign, await db.ContentItems.Where(x => x.CampaignId == campaign.Id).ToListAsync(ct), await db.CreativeVersions.Join(db.ContentItems, v => v.ContentItemId, i => i.Id, (v, i) => new { v, i }).Where(x => x.i.CampaignId == campaign.Id && x.v.IsSelected).Select(x => x.v).ToListAsync(ct), storage, ct), "application/zip", $"red-ai-{id:N}.zip") : Results.NotFound());
 api.MapGet("/jobs/{id:guid}", async (Guid id, RedAIDbContext db) => await db.Jobs.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id) is { } job ? Results.Ok(job) : Results.NotFound());
 api.MapGet("/campaigns/{id:guid}/content/job", async (Guid id, RedAIDbContext db) => await db.Jobs.AsNoTracking().Where(job => job.Type == "content-generation" && job.EntityType == "campaign" && job.EntityId == id && (job.Status == "queued" || job.Status == "running")).OrderByDescending(job => job.CreatedAt).FirstOrDefaultAsync() is { } job ? Results.Ok(job) : Results.NoContent());
 api.MapPost("/demo/reset", async (RedAIDbContext db, IAssetStorage storage, InMemoryCampaignStore jobs, CancellationToken ct) => { var assetKeys = await db.BrandSources.Where(source => source.StorageKey != null).Select(source => source.StorageKey!).Concat(db.CreativeVersions.Where(version => version.ImageStorageKey != null).Select(version => version.ImageStorageKey!)).Concat(db.CreativeVersions.Where(version => version.ThumbnailStorageKey != null).Select(version => version.ThumbnailStorageKey!)).ToListAsync(ct); foreach (var key in assetKeys.Distinct()) await storage.DeleteAsync(key, ct); db.AIRuns.RemoveRange(db.AIRuns); db.Jobs.RemoveRange(db.Jobs); db.RemoveRange(db.Projects); await db.SaveChangesAsync(ct); jobs.Projects.Clear(); jobs.Jobs.Clear(); return Results.NoContent(); });
@@ -277,7 +277,32 @@ static string ResolveConnectionString(IConfiguration configuration)
     };
     return builder.ConnectionString;
 }
-static byte[] CreateExportZip(Project project, Campaign campaign, IReadOnlyList<ContentItem> items, IReadOnlyList<CreativeVersion> creatives) { using var stream = new MemoryStream(); using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true)) { var manifest = archive.CreateEntry("campaign.json"); using (var writer = new StreamWriter(manifest.Open(), Encoding.UTF8)) writer.Write(JsonSerializer.Serialize(new { project = project.Name, campaign = campaign.Name, contentCount = items.Count, creativeCount = creatives.Count }, new JsonSerializerOptions { WriteIndented = true })); foreach (var creative in creatives) { var entry = archive.CreateEntry($"creatives/content-{creative.ContentItemId}/v{creative.Version}.json"); using var writer = new StreamWriter(entry.Open(), Encoding.UTF8); writer.Write(creative.LayoutJson); } } return stream.ToArray(); }
+static async Task<byte[]> CreateExportZip(Project project, Campaign campaign, IReadOnlyList<ContentItem> items, IReadOnlyList<CreativeVersion> creatives, IAssetStorage storage, CancellationToken ct)
+{
+    using var stream = new MemoryStream();
+    using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true))
+    {
+        var manifest = archive.CreateEntry("campaign.json");
+        await using (var writer = new StreamWriter(manifest.Open(), Encoding.UTF8))
+            await writer.WriteAsync(JsonSerializer.Serialize(new { project = project.Name, campaign = campaign.Name, contentCount = items.Count, creativeCount = creatives.Count }, new JsonSerializerOptions { WriteIndented = true }));
+
+        foreach (var creative in creatives)
+        {
+            var metadata = archive.CreateEntry($"creatives/content-{creative.ContentItemId}/v{creative.Version}.json");
+            await using (var writer = new StreamWriter(metadata.Open(), Encoding.UTF8))
+                await writer.WriteAsync(creative.LayoutJson);
+
+            if (string.IsNullOrWhiteSpace(creative.ImageStorageKey))
+                throw new InvalidOperationException($"The selected creative {creative.Id} does not have a rendered PNG.");
+
+            var png = archive.CreateEntry($"creatives/content-{creative.ContentItemId}/v{creative.Version}.png", CompressionLevel.Optimal);
+            await using var source = await storage.OpenReadAsync(creative.ImageStorageKey, ct);
+            await using var destination = png.Open();
+            await source.CopyToAsync(destination, ct);
+        }
+    }
+    return stream.ToArray();
+}
 public record CreateProject(string Name, string? InstagramHandle, string? WebsiteUrl, string? ManualContext);
 public record CreateCampaign(string Name, string? Objective, int TargetCount, string? Context);
 public record SelectIdeas(Guid[] IdeaIds);

@@ -5,13 +5,15 @@ export type ApiJob = {
   completedSteps: number;
   totalSteps: number;
   message: string;
+  error?: string;
 };
 
 export type ApiProject = { id: string; name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string; currentStep: string; status: string };
 export type ApiCampaign = { id: string; projectId: string; name: string; objective: string; targetCount: number; context?: string };
 export type ApiStrategy = { campaignName: string; strategicObjective: string; rationale: string; contentMix: { pillar: string; percentage: number }[]; pillars: { id: string; name: string; description: string }[]; targetAudiences: string[]; messages: string[]; creativeDirection: { style: string[]; recommendations: string[]; avoid: string[] }; avoid: string[] };
 export type ApiIdea = { id: string; ordinal: number; title: string; pillar: string; contentType: string; description: string; selected: boolean };
-export type ApiContent = { id: string; sequence: number; headline: string; caption: string; cta?: string; visualDirection?: string; version: number };
+export type ApiContent = { contentId: string; revisionId: string; sequence: number; headline: string; supportingText?: string; caption: string; cta?: string; visualDirection?: string; version: number; isApproved: boolean };
+export type ApiContentRevision = { id: string; contentItemId: string; version: number; headline: string; supportingText?: string; caption: string; cta?: string; visualDirection?: string; isApproved: boolean };
 export type ApiBrandProfile = { visualIdentity: { colors?: { hex: string }[] }; voice: { traits?: string[]; avoid?: string[] }; audiences?: { name: string }[]; products?: { name: string }[]; contentAnalysis?: { recommendations?: string[] }; restrictions?: string[] };
 export type ApiHealth = { status: string; aiMode: string };
 
@@ -59,7 +61,9 @@ export const api = {
   selectIdeas: (campaignId: string, ideaIds: string[]) => request<ApiIdea[]>(`/campaigns/${campaignId}/ideas/select`, { method: 'POST', body: JSON.stringify({ ideaIds }) }),
   generateContent: (campaignId: string) => request<ApiJob>(`/campaigns/${campaignId}/content/generate`, { method: 'POST' }),
   content: (campaignId: string) => request<ApiContent[]>(`/campaigns/${campaignId}/content`),
-  reviseContent: (contentId: string, instruction: string) => request<{ version: number }>(`/content/${contentId}/revise`, { method: 'POST', body: JSON.stringify({ instruction }) }),
+  contentItem: (contentId: string) => request<{ item: { id: string }; revisions: ApiContentRevision[] }>(`/content/${contentId}`),
+  reviseContent: (contentId: string, instruction: string) => request<ApiContentRevision>(`/content/${contentId}/revise`, { method: 'POST', body: JSON.stringify({ instruction }) }),
+  approveRevision: (contentId: string, revisionId: string) => request<ApiContentRevision>(`/content/${contentId}/revision/${revisionId}/approve`, { method: 'POST' }),
   generateCreatives: (campaignId: string) => request<ApiJob>(`/campaigns/${campaignId}/creatives/generate`, { method: 'POST' }),
   reviseCreative: (contentId: string, instruction: string) => request<ApiJob>(`/content/${contentId}/creative/revise`, { method: 'POST', body: JSON.stringify({ instruction }) }),
   job: (id: string) => request<ApiJob>(`/jobs/${id}`),
@@ -74,6 +78,6 @@ export async function waitForJob(job: ApiJob, onUpdate: (job: ApiJob) => void): 
     current = await api.job(current.id);
     onUpdate(current);
   }
-  if (current.status === 'failed') throw new ApiError(current.message);
+  if (current.status === 'failed') throw new ApiError(current.error ?? current.message);
   return current;
 }

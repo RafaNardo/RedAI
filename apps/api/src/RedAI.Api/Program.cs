@@ -20,7 +20,7 @@ builder.Services.AddScoped<IAIRunWriter, EfAIRunWriter>();
 var bundledContracts = Path.Combine(builder.Environment.ContentRootPath, "contracts");
 var repositoryContracts = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "..", "..", "docs", "contracts"));
 builder.Services.AddSingleton<IContractSchemaCatalog>(_ => new FileContractSchemaCatalog(Directory.Exists(bundledContracts) ? bundledContracts : repositoryContracts));
-builder.Services.AddScoped<IDeterministicCreativeRenderer, PngCreativeRenderer>();
+builder.Services.AddScoped<IDeterministicCreativeRenderer, PlaywrightCreativeRenderer>();
 builder.Services.AddHttpClient<OpenAIResponsesClient>(client => client.Timeout = TimeSpan.FromMinutes(5));
 builder.Services.AddHttpClient("brand-website");
 builder.Services.AddSingleton<MockAIClient>();
@@ -36,6 +36,26 @@ Directory.CreateDirectory(root);
 app.UseStaticFiles(new StaticFileOptions { FileProvider = new PhysicalFileProvider(root), RequestPath = "/assets" });
 
 var api = app.MapGroup("/api");
+if (app.Environment.IsDevelopment()) api.MapGet("/dev/creative-templates", async (IDeterministicCreativeRenderer renderer, CancellationToken ct) =>
+{
+    var samples = new[]
+    {
+        ("editorial-bold", "Proteção começa com escolhas bem informadas", "Planeje hoje para viver com mais tranquilidade amanhã.", "Fale com um especialista", new CreativePalette("#0B0D10", "#F8F5EE", "#FF5A36")),
+        ("minimal-center", "Clareza para decidir melhor", "Informação simples para proteger o que importa.", "Conheça as opções", new CreativePalette("#F7F2EA", "#13233A", "#E56A3C")),
+        ("statement", "Seu futuro merece atenção", "Uma escolha de cada vez, com confiança.", "Planeje agora", new CreativePalette("#15263B", "#F8F5EE", "#F1B24A")),
+        ("split-image", "Cuidar é estar presente", "Proteção para os seus próximos passos.", "Converse com a gente", new CreativePalette("#EAE4DA", "#13233A", "#D65C40")),
+        ("educational", "O que observar antes de contratar", "Entenda coberturas, prazos e a proteção ideal para sua realidade.", "Saiba mais", new CreativePalette("#F8F5EE", "#173653", "#E75C3B")),
+        ("promotional", "Proteção que acompanha seus planos", "Soluções claras para quem quer seguir em frente.", "Fale com a equipe", new CreativePalette("#F6F1E8", "#142D4A", "#ED663E"))
+    };
+    var output = new List<object>();
+    foreach (var sample in samples)
+    {
+        var key = $"development/creative-templates/{sample.Item1}.png";
+        await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(new CreativeLayout(sample.Item1, sample.Item5, new CreativeHeadline(sample.Item2, sample.Item1 is "minimal-center" or "statement" ? "center" : "left", sample.Item1 is "editorial-bold" or "statement" ? "2xl" : "xl", ["Proteção"]), new CreativeLogo("bottom-right"), sample.Item3, sample.Item4), key), ct);
+        output.Add(new { template = sample.Item1, key, url = $"/assets/{key}" });
+    }
+    return Results.Ok(output);
+});
 api.MapGet("/health", (IConfiguration c) => Results.Ok(new { status = "ok", aiMode = c["AI:Mode"] ?? "mock" }));
 api.MapGet("/projects", async (RedAIDbContext db) => await db.Projects.AsNoTracking().OrderByDescending(p => p.UpdatedAt).ToListAsync());
 api.MapPost("/projects", async (CreateProject r, RedAIDbContext db) => {
@@ -131,7 +151,8 @@ static async Task<IResult> Revise(RedAIDbContext db, IAIClient ai, IContractSche
 static async Task<IResult> EditRevision(RedAIDbContext db, Guid id, Guid revisionId, EditRevision edit) { var r = await db.ContentRevisions.FirstOrDefaultAsync(x => x.Id == revisionId && x.ContentItemId == id); if (r is null) return Results.NotFound(); r.Headline = edit.Headline ?? r.Headline; r.Caption = edit.Caption ?? r.Caption; r.Cta = edit.Cta ?? r.Cta; r.SupportingText = edit.SupportingText ?? r.SupportingText; await db.SaveChangesAsync(); return Results.Ok(r); }
 static async Task<IResult> ApproveRevision(RedAIDbContext db, Guid id, Guid revisionId) { var item = await db.ContentItems.FindAsync(id); var r = await db.ContentRevisions.FirstOrDefaultAsync(x => x.Id == revisionId && x.ContentItemId == id); if (item is null || r is null) return Results.NotFound(); r.IsApproved = true; item.ApprovedRevisionId = r.Id; item.Status = "approved"; await db.SaveChangesAsync(); return Results.Ok(r); }
 static async Task<IResult> SelectCreative(RedAIDbContext db, Guid id, Guid versionId) { var v = await db.CreativeVersions.FirstOrDefaultAsync(x => x.Id == versionId && x.ContentItemId == id); if (v is null) return Results.NotFound(); foreach (var x in await db.CreativeVersions.Where(x => x.ContentItemId == id).ToListAsync()) x.IsSelected = x.Id == versionId; await db.SaveChangesAsync(); return Results.Ok(v); }
-static async Task MaterializeCreatives(RedAIDbContext db, IDeterministicCreativeRenderer renderer, Guid campaignId, CancellationToken ct) { var campaign = await db.Campaigns.FindAsync([campaignId], ct) ?? throw new KeyNotFoundException(); var items = await db.ContentItems.Where(x => x.CampaignId == campaignId).OrderBy(x => x.Sequence).ToListAsync(ct); foreach (var item in items) { if (await db.CreativeVersions.AnyAsync(x => x.ContentItemId == item.Id, ct)) continue; var revision = await db.ContentRevisions.Where(x => x.ContentItemId == item.Id).OrderByDescending(x => x.Version).FirstAsync(ct); var template = (item.Sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }; var layout = new CreativeLayout(template, new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F"), new CreativeHeadline(revision.Headline, template is "minimal-center" or "statement" ? "center" : "left", "xl", []), new CreativeLogo("rodapé"), revision.SupportingText, revision.Cta); var key = $"projects/{campaign.ProjectId}/content/{item.Id}/creatives/v1/final.png"; await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct); db.CreativeVersions.Add(new CreativeVersion { ContentItemId = item.Id, Version = 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key }); } await db.SaveChangesAsync(ct); }
+static async Task MaterializeCreatives(RedAIDbContext db, IDeterministicCreativeRenderer renderer, Guid campaignId, CancellationToken ct) { var campaign = await db.Campaigns.FindAsync([campaignId], ct) ?? throw new KeyNotFoundException(); var palette = await ResolveBrandPalette(db, campaign.ProjectId, ct); var items = await db.ContentItems.Where(x => x.CampaignId == campaignId).OrderBy(x => x.Sequence).ToListAsync(ct); foreach (var item in items) { if (await db.CreativeVersions.AnyAsync(x => x.ContentItemId == item.Id, ct)) continue; var revision = await db.ContentRevisions.Where(x => x.ContentItemId == item.Id).OrderByDescending(x => x.Version).FirstAsync(ct); var template = (item.Sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }; var layout = new CreativeLayout(template, palette, new CreativeHeadline(revision.Headline, template is "minimal-center" or "statement" ? "center" : "left", "xl", []), new CreativeLogo("rodapé"), revision.SupportingText, revision.Cta); var key = $"projects/{campaign.ProjectId}/content/{item.Id}/creatives/v1/final.png"; await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct); db.CreativeVersions.Add(new CreativeVersion { ContentItemId = item.Id, Version = 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key }); } await db.SaveChangesAsync(ct); }
+static async Task<CreativePalette> ResolveBrandPalette(RedAIDbContext db, Guid projectId, CancellationToken ct) { var profile = await db.BrandProfiles.AsNoTracking().FirstOrDefaultAsync(item => item.ProjectId == projectId, ct); if (profile is null) return new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F"); try { using var json = JsonDocument.Parse(profile.ProfileJson); var colors = json.RootElement.GetProperty("visualIdentity").GetProperty("colors").EnumerateArray().Select(color => color.GetProperty("hex").GetString()).Where(hex => !string.IsNullOrWhiteSpace(hex) && Regex.IsMatch(hex!, "^#[0-9A-Fa-f]{6}$")).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); return colors.Length switch { >= 3 => new CreativePalette(colors[0], colors[1], colors[2]), 2 => new CreativePalette(colors[0], colors[1], colors[0]), 1 => new CreativePalette(colors[0], "#F6F6F3", "#FF3D1F"), _ => new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F") }; } catch (JsonException) { return new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F"); } }
 static async Task<IResult> Seed(RedAIDbContext db, string name, string handle) { var p = new Project { Name = name, InstagramHandle = handle, CurrentStep = "sources" }; db.Projects.Add(p); await db.SaveChangesAsync(); return Results.Ok(p); }
 static async Task ApplyMigrationsWithRetryAsync(IServiceProvider services, ILogger logger, CancellationToken stoppingToken)
 {

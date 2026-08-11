@@ -28,8 +28,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function upload<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, { method: 'POST', body });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new ApiError(payload.error ?? `Não foi possível enviar os arquivos (${response.status}).`, response.status);
+  }
+  return response.json() as Promise<T>;
+}
+
 export const api = {
   createProject: (body: { name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string }) => request<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(body) }),
+  uploadSources: (projectId: string, files: File[]) => { const form = new FormData(); files.forEach(file => form.append('files', file, file.name)); return upload(`/projects/${projectId}/sources`, form); },
   analyzeBrand: (projectId: string) => request<ApiJob>(`/projects/${projectId}/brand/analyze`, { method: 'POST' }),
   approveBrand: (projectId: string) => request(`/projects/${projectId}/brand/approve`, { method: 'POST' }),
   createCampaign: (projectId: string, body: { name: string; objective?: string; targetCount: number; context?: string }) => request<ApiCampaign>(`/projects/${projectId}/campaign`, { method: 'POST', body: JSON.stringify(body) }),

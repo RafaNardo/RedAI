@@ -109,13 +109,14 @@ api.MapPost("/content/{id:guid}/revise", async (Guid id, ReviseRequest r, RedAID
 api.MapPut("/content/{id:guid}/revision/{revisionId:guid}", async (Guid id, Guid revisionId, EditRevision r, RedAIDbContext db) => await EditRevision(db, id, revisionId, r));
 api.MapPost("/content/{id:guid}/revision/{revisionId:guid}/approve", async (Guid id, Guid revisionId, RedAIDbContext db) => await ApproveRevision(db, id, revisionId));
 
-api.MapPost("/campaigns/{id:guid}/creatives/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => !await db.Campaigns.AnyAsync(c => c.Id == id) ? Results.NotFound() : await Start(db, jobs, "creative-generation", "campaign", id, await db.ContentItems.CountAsync(item => item.CampaignId == id), async (sp, ct) => await MaterializeCreatives(sp.GetRequiredService<RedAIDbContext>(), sp.GetRequiredService<IAIClient>(), sp.GetRequiredService<IContractSchemaCatalog>(), sp.GetRequiredService<IAssetStorage>(), sp.GetRequiredService<IDeterministicCreativeRenderer>(), id, ct)));
+api.MapPost("/campaigns/{id:guid}/creatives/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => !await db.Campaigns.AnyAsync(c => c.Id == id) ? Results.NotFound() : await Start(db, jobs, "creative-generation", "campaign", id, await db.ContentItems.CountAsync(item => item.CampaignId == id), async (sp, ct) => await MaterializeCreatives(sp.GetRequiredService<RedAIDbContext>(), sp.GetRequiredService<IServiceScopeFactory>(), id, ct)));
 api.MapGet("/content/{id:guid}/creatives", async (Guid id, RedAIDbContext db) => Results.Ok(await db.CreativeVersions.Where(x => x.ContentItemId == id).OrderBy(x => x.Version).ToListAsync()));
 api.MapPost("/content/{id:guid}/creative/revise", async (Guid id, ReviseRequest request, RedAIDbContext db, JobQueue jobs) => await db.ContentItems.AnyAsync(x => x.Id == id) ? await Start(db, jobs, "creative-revision", "content", id, 1, async (sp, ct) => await ReviseCreative(sp.GetRequiredService<RedAIDbContext>(), sp.GetRequiredService<IAIClient>(), sp.GetRequiredService<IContractSchemaCatalog>(), sp.GetRequiredService<IAssetStorage>(), sp.GetRequiredService<IDeterministicCreativeRenderer>(), id, request.Instruction, ct)) : Results.NotFound());
 api.MapPost("/content/{id:guid}/creative/{versionId:guid}/select", async (Guid id, Guid versionId, RedAIDbContext db) => await SelectCreative(db, id, versionId));
 api.MapGet("/projects/{id:guid}/result", async (Guid id, RedAIDbContext db) => await db.Projects.Include(p => p.Campaign).FirstOrDefaultAsync(p => p.Id == id) is { } p ? Results.Ok(new { p.Id, p.Name, campaign = p.Campaign, status = p.Status }) : Results.NotFound());
 api.MapGet("/projects/{id:guid}/export", async (Guid id, RedAIDbContext db) => await db.Projects.Include(p => p.Campaign).FirstOrDefaultAsync(p => p.Id == id) is { Campaign: { } campaign } project ? Results.File(CreateExportZip(project, campaign, await db.ContentItems.Where(x => x.CampaignId == campaign.Id).ToListAsync(), await db.CreativeVersions.Join(db.ContentItems, v => v.ContentItemId, i => i.Id, (v, i) => new { v, i }).Where(x => x.i.CampaignId == campaign.Id).Select(x => x.v).ToListAsync()), "application/zip", $"red-ai-{id:N}.zip") : Results.NotFound());
 api.MapGet("/jobs/{id:guid}", async (Guid id, RedAIDbContext db) => await db.Jobs.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id) is { } job ? Results.Ok(job) : Results.NotFound());
+api.MapGet("/campaigns/{id:guid}/content/job", async (Guid id, RedAIDbContext db) => await db.Jobs.AsNoTracking().Where(job => job.Type == "content-generation" && job.EntityType == "campaign" && job.EntityId == id && (job.Status == "queued" || job.Status == "running")).OrderByDescending(job => job.CreatedAt).FirstOrDefaultAsync() is { } job ? Results.Ok(job) : Results.NoContent());
 api.MapPost("/demo/reset", async (RedAIDbContext db, IAssetStorage storage, InMemoryCampaignStore jobs, CancellationToken ct) => { var assetKeys = await db.BrandSources.Where(source => source.StorageKey != null).Select(source => source.StorageKey!).Concat(db.CreativeVersions.Where(version => version.ImageStorageKey != null).Select(version => version.ImageStorageKey!)).Concat(db.CreativeVersions.Where(version => version.ThumbnailStorageKey != null).Select(version => version.ThumbnailStorageKey!)).ToListAsync(ct); foreach (var key in assetKeys.Distinct()) await storage.DeleteAsync(key, ct); db.AIRuns.RemoveRange(db.AIRuns); db.Jobs.RemoveRange(db.Jobs); db.RemoveRange(db.Projects); await db.SaveChangesAsync(ct); jobs.Projects.Clear(); jobs.Jobs.Clear(); return Results.NoContent(); });
 api.MapPost("/demo/seed/cassel", async (RedAIDbContext db) => await Seed(db, "Cassel Seguros", "@casselseguros"));
 api.MapPost("/demo/seed/redzone", async (RedAIDbContext db) => await Seed(db, "Redzone MKT", "@redzonemkt"));
@@ -154,31 +155,45 @@ static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Gui
     return await Start(db, jobs, "content-generation", "campaign", id, 5, async (sp, ct) =>
     {
         var context = sp.GetRequiredService<RedAIDbContext>();
-        var ai = sp.GetRequiredService<IAIClient>();
         var selected = await context.ContentIdeas.Where(i => i.CampaignId == id && i.Selected).OrderBy(i => i.Ordinal).ToListAsync(ct);
         var progressJob = await context.Jobs.Where(job => job.Type == "content-generation" && job.EntityType == "campaign" && job.EntityId == id && job.Status == "running").OrderByDescending(job => job.CreatedAt).FirstAsync(ct);
+        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
 
-        context.ContentItems.RemoveRange(context.ContentItems.Where(i => i.CampaignId == id));
-        foreach (var (idea, index) in selected.Select((value, itemIndex) => (value, itemIndex)))
+        async Task<GeneratedCopy> GenerateCopyAsync(ContentIdea idea)
         {
-            var item = new ContentItem { CampaignId = id, SourceIdeaId = idea.Id, Sequence = index + 1 };
-            context.ContentItems.Add(item);
-            GeneratedCopy copy;
-            if (ai.Mode == "mock")
-                copy = new(idea.Title, $"Proteção começa com escolhas bem informadas. {idea.Description}", null, "Fale com a equipe", "Editorial azul com fotografia humana", ["#proteção"]);
-            else
-            {
-                using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("content-generation", "Você é o ContentGenerator do RED AI. Crie copy social em português brasileiro para a ideia. Responda estritamente no schema.", new { idea.Title, idea.Pillar, idea.ContentType, idea.Description }, "content-revision", sp.GetRequiredService<IContractSchemaCatalog>().Load("content-revision")), ct);
-                copy = output.Deserialize<GeneratedCopy>() ?? throw new InvalidOperationException("ContentGenerator returned no copy.");
-            }
+            using var copyScope = scopeFactory.CreateScope();
+            var copyAi = copyScope.ServiceProvider.GetRequiredService<IAIClient>();
+            if (copyAi.Mode == "mock")
+                return new GeneratedCopy(idea.Title, $"Proteção começa com escolhas bem informadas. {idea.Description}", null, "Fale com a equipe", "Editorial azul com fotografia humana", ["#proteção"]);
 
+            var copySchemas = copyScope.ServiceProvider.GetRequiredService<IContractSchemaCatalog>();
+            using var output = await copyAi.CompleteStructuredAsync(new StructuredTextRequest("content-generation", "Você é o ContentGenerator do RED AI. Crie copy social em português brasileiro para a ideia. Responda estritamente no schema.", new { idea.Title, idea.Pillar, idea.ContentType, idea.Description }, "content-revision", copySchemas.Load("content-revision")), ct);
+            var copy = output.Deserialize<GeneratedCopy>() ?? throw new InvalidOperationException("ContentGenerator returned no copy.");
             if (string.IsNullOrWhiteSpace(copy.Headline) || string.IsNullOrWhiteSpace(copy.Caption) || string.IsNullOrWhiteSpace(copy.VisualDirection))
                 throw new InvalidOperationException("ContentGenerator returned an incomplete copy.");
+            return copy;
+        }
 
+        context.ContentItems.RemoveRange(context.ContentItems.Where(i => i.CampaignId == id));
+        await context.SaveChangesAsync(ct);
+
+        var pending = selected.Select((idea, index) => (idea, sequence: index + 1, copy: GenerateCopyAsync(idea))).ToList();
+        var completed = 0;
+        while (pending.Count > 0)
+        {
+            var completedTask = await Task.WhenAny(pending.Select(item => item.copy));
+            var index = pending.FindIndex(item => item.copy == completedTask);
+            var (idea, sequence, copyTask) = pending[index];
+            pending.RemoveAt(index);
+            var copy = await copyTask;
+
+            var item = new ContentItem { CampaignId = id, SourceIdeaId = idea.Id, Sequence = sequence };
+            context.ContentItems.Add(item);
             context.ContentRevisions.Add(new ContentRevision { ContentItemId = item.Id, Version = 1, Headline = copy.Headline, Caption = copy.Caption, SupportingText = copy.SupportingText, Cta = copy.Cta, VisualDirection = copy.VisualDirection, HashtagsJson = JsonSerializer.Serialize(copy.Hashtags) });
-            progressJob.CompletedSteps = index + 1;
-            progressJob.Progress = (index + 1) * 100 / selected.Count;
-            progressJob.Message = $"Gerando conteúdo {index + 1} de {selected.Count}";
+            completed++;
+            progressJob.CompletedSteps = completed;
+            progressJob.Progress = completed * 100 / selected.Count;
+            progressJob.Message = $"Gerando conteúdo {completed} de {selected.Count}";
             await context.SaveChangesAsync(ct);
         }
     });
@@ -187,7 +202,48 @@ static async Task<IResult> Revise(RedAIDbContext db, IAIClient ai, IContractSche
 static async Task<IResult> EditRevision(RedAIDbContext db, Guid id, Guid revisionId, EditRevision edit) { var r = await db.ContentRevisions.FirstOrDefaultAsync(x => x.Id == revisionId && x.ContentItemId == id); if (r is null) return Results.NotFound(); r.Headline = edit.Headline ?? r.Headline; r.Caption = edit.Caption ?? r.Caption; r.Cta = edit.Cta ?? r.Cta; r.SupportingText = edit.SupportingText ?? r.SupportingText; await db.SaveChangesAsync(); return Results.Ok(r); }
 static async Task<IResult> ApproveRevision(RedAIDbContext db, Guid id, Guid revisionId) { var item = await db.ContentItems.FindAsync(id); var r = await db.ContentRevisions.FirstOrDefaultAsync(x => x.Id == revisionId && x.ContentItemId == id); if (item is null || r is null) return Results.NotFound(); r.IsApproved = true; item.ApprovedRevisionId = r.Id; item.Status = "approved"; await db.SaveChangesAsync(); return Results.Ok(r); }
 static async Task<IResult> SelectCreative(RedAIDbContext db, Guid id, Guid versionId) { var v = await db.CreativeVersions.FirstOrDefaultAsync(x => x.Id == versionId && x.ContentItemId == id); if (v is null) return Results.NotFound(); foreach (var x in await db.CreativeVersions.Where(x => x.ContentItemId == id).ToListAsync()) x.IsSelected = x.Id == versionId; await db.SaveChangesAsync(); return Results.Ok(v); }
-static async Task MaterializeCreatives(RedAIDbContext db, IAIClient ai, IContractSchemaCatalog schemas, IAssetStorage storage, IDeterministicCreativeRenderer renderer, Guid campaignId, CancellationToken ct) { var campaign = await db.Campaigns.FindAsync([campaignId], ct) ?? throw new KeyNotFoundException(); var palette = await ResolveBrandPalette(db, campaign.ProjectId, ct); var items = await db.ContentItems.Where(x => x.CampaignId == campaignId).OrderBy(x => x.Sequence).ToListAsync(ct); foreach (var item in items) { if (await db.CreativeVersions.AnyAsync(x => x.ContentItemId == item.Id, ct)) continue; var revision = await db.ContentRevisions.Where(x => x.ContentItemId == item.Id).OrderByDescending(x => x.Version).FirstAsync(ct); var brief = await CreateCreativeBrief(ai, schemas, campaign, revision, item.Sequence, palette, ct); var asset = brief.ImageRequired ? await GenerateVisualAsset(ai, storage, campaign.ProjectId, item.Id, 1, brief.ImageDirection, ct) : null; var layout = new CreativeLayout(brief.Template, palette, new CreativeHeadline(revision.Headline, brief.Template is "minimal-center" or "statement" ? "center" : "left", brief.Template is "editorial-bold" or "statement" ? "2xl" : "xl", []), new CreativeLogo(brief.LogoPlacement), revision.SupportingText, revision.Cta, asset); var key = $"projects/{campaign.ProjectId}/content/{item.Id}/creatives/v1/final.png"; await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct); db.CreativeVersions.Add(new CreativeVersion { ContentItemId = item.Id, Version = 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key }); } await db.SaveChangesAsync(ct); }
+static async Task MaterializeCreatives(RedAIDbContext db, IServiceScopeFactory scopeFactory, Guid campaignId, CancellationToken ct)
+{
+    var itemIds = await db.ContentItems.Where(item => item.CampaignId == campaignId).OrderBy(item => item.Sequence).Select(item => item.Id).ToListAsync(ct);
+    var progressJob = await db.Jobs.Where(job => job.Type == "creative-generation" && job.EntityType == "campaign" && job.EntityId == campaignId && job.Status == "running").OrderByDescending(job => job.CreatedAt).FirstAsync(ct);
+
+    async Task RenderCreativeAsync(Guid contentItemId)
+    {
+        using var renderScope = scopeFactory.CreateScope();
+        var context = renderScope.ServiceProvider.GetRequiredService<RedAIDbContext>();
+        var item = await context.ContentItems.FindAsync([contentItemId], ct) ?? throw new KeyNotFoundException();
+        if (await context.CreativeVersions.AnyAsync(version => version.ContentItemId == contentItemId, ct)) return;
+
+        var campaign = await context.Campaigns.FindAsync([campaignId], ct) ?? throw new KeyNotFoundException();
+        var revision = await context.ContentRevisions.Where(revision => revision.ContentItemId == contentItemId).OrderByDescending(revision => revision.Version).FirstAsync(ct);
+        var palette = await ResolveBrandPalette(context, campaign.ProjectId, ct);
+        var ai = renderScope.ServiceProvider.GetRequiredService<IAIClient>();
+        var schemas = renderScope.ServiceProvider.GetRequiredService<IContractSchemaCatalog>();
+        var storage = renderScope.ServiceProvider.GetRequiredService<IAssetStorage>();
+        var renderer = renderScope.ServiceProvider.GetRequiredService<IDeterministicCreativeRenderer>();
+        var brief = await CreateCreativeBrief(ai, schemas, campaign, revision, item.Sequence, palette, ct);
+        var asset = brief.ImageRequired ? await GenerateVisualAsset(ai, storage, campaign.ProjectId, item.Id, 1, brief.ImageDirection, ct) : null;
+        var layout = new CreativeLayout(brief.Template, palette, new CreativeHeadline(revision.Headline, brief.Template is "minimal-center" or "statement" ? "center" : "left", brief.Template is "editorial-bold" or "statement" ? "2xl" : "xl", []), new CreativeLogo(brief.LogoPlacement), revision.SupportingText, revision.Cta, asset);
+        var key = $"projects/{campaign.ProjectId}/content/{item.Id}/creatives/v1/final.png";
+        await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct);
+        context.CreativeVersions.Add(new CreativeVersion { ContentItemId = item.Id, Version = 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key });
+        await context.SaveChangesAsync(ct);
+    }
+
+    var pending = itemIds.Select(itemId => RenderCreativeAsync(itemId)).ToList();
+    var completed = 0;
+    while (pending.Count > 0)
+    {
+        var completedTask = await Task.WhenAny(pending);
+        pending.Remove(completedTask);
+        await completedTask;
+        completed++;
+        progressJob.CompletedSteps = completed;
+        progressJob.Progress = completed * 100 / itemIds.Count;
+        progressJob.Message = $"Produzindo arte {completed} de {itemIds.Count}";
+        await db.SaveChangesAsync(ct);
+    }
+}
 static async Task<CreativeBrief> CreateCreativeBrief(IAIClient ai, IContractSchemaCatalog schemas, Campaign campaign, ContentRevision revision, int sequence, CreativePalette palette, CancellationToken ct) { if (ai.Mode == "mock") return new CreativeBrief("Comunicação de marca", (sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }, false, "Sem imagem gerada", "Tipografia editorial", ["claro"], [palette.Background, palette.Primary, palette.Accent], ["headline", "apoio", "cta"], "rodapé", ["texto em imagem"]); using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("creative-brief", "Você é o Creative Director do RED AI. Crie um brief visual para post social. Decida se uma imagem gerada agrega valor. A imagem, se usada, será apenas fundo: nunca peça tipografia, logo ou CTA nela. Responda estritamente no schema.", new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, content = new { revision.Headline, revision.SupportingText, revision.Caption, revision.Cta, revision.VisualDirection }, palette }, "creative-brief", schemas.Load("creative-brief")), ct); return output.Deserialize<CreativeBrief>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("Creative Director returned no brief."); }
 static async Task<string?> GenerateVisualAsset(IAIClient ai, IAssetStorage storage, Guid projectId, Guid contentItemId, int version, string direction, CancellationToken ct) { if (ai.Mode != "openai") return null; var prompt = $"Create a premium editorial background photograph for a Brazilian brand social post. Direction: {direction}. No text, no lettering, no typography, no words, no logo, no brand mark, no watermark, no signature, no UI, no borders. Leave clear negative space for a separate renderer to add copy."; var key = $"projects/{projectId}/content/{contentItemId}/visuals/v{version}/background.png"; return (await new VisualAssetGenerator(ai, storage).GenerateAndStoreAsync(new ImageGenerationRequest("creative-visual", prompt), key, ct)).Asset.StorageKey; }
 static async Task ReviseCreative(RedAIDbContext db, IAIClient ai, IContractSchemaCatalog schemas, IAssetStorage storage, IDeterministicCreativeRenderer renderer, Guid contentItemId, string instruction, CancellationToken ct) { if (string.IsNullOrWhiteSpace(instruction)) throw new ArgumentException("A instrução de revisão é obrigatória."); var current = await db.CreativeVersions.Where(item => item.ContentItemId == contentItemId).OrderByDescending(item => item.Version).FirstOrDefaultAsync(ct) ?? throw new KeyNotFoundException("Creative version not found."); var item = await db.ContentItems.FindAsync([contentItemId], ct) ?? throw new KeyNotFoundException(); var revision = await db.ContentRevisions.FindAsync([current.SourceContentRevisionId], ct) ?? throw new KeyNotFoundException(); var layout = JsonSerializer.Deserialize<CreativeLayout>(current.LayoutJson) ?? throw new InvalidOperationException("Creative layout is invalid."); var plan = await CreateRevisionPlan(ai, schemas, instruction, layout, ct); var changes = (plan.Actions ?? []).Select(action => action.Type).ToHashSet(); if (changes.Contains("CHANGE_TYPOGRAPHY")) layout = layout with { Headline = layout.Headline with { Size = "lg" } }; if (changes.Contains("CHANGE_LAYOUT")) layout = layout with { Template = "minimal-center", Headline = layout.Headline with { Alignment = "center" } }; if (changes.Contains("CHANGE_COLORS")) layout = layout with { Palette = new CreativePalette("#F5F1E8", layout.Palette.Primary, layout.Palette.Accent) }; if (changes.Contains("REGENERATE_IMAGE") || changes.Contains("CHANGE_ASSET")) layout = layout with { BackgroundAssetKey = await GenerateVisualAsset(ai, storage, (await db.Campaigns.FindAsync([item.CampaignId], ct))!.ProjectId, contentItemId, current.Version + 1, plan.Summary, ct) }; var key = $"projects/{(await db.Campaigns.FindAsync([item.CampaignId], ct))!.ProjectId}/content/{contentItemId}/creatives/v{current.Version + 1}/final.png"; await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct); db.CreativeVersions.Add(new CreativeVersion { ContentItemId = contentItemId, Version = current.Version + 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key, RevisionInstruction = instruction }); await db.SaveChangesAsync(ct); }

@@ -11,4 +11,6 @@ test('campaign route produces five static posts', () => {
   assert.equal(posts.length, 5);
   assert.equal(new Set(posts.map(post => post.sequence)).size, 5);
   assert.equal(posts.every(post => post.route === selected[0]), true);
+  const exportEntries = posts.map(post => `posts/${String(post.sequence).padStart(2, '0')}-post-estatico.png`);
+  assert.deepEqual(exportEntries, ['posts/01-post-estatico.png', 'posts/02-post-estatico.png', 'posts/03-post-estatico.png', 'posts/04-post-estatico.png', 'posts/05-post-estatico.png']);
 });

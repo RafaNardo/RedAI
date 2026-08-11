@@ -25,7 +25,9 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } });
+  let response: Response;
+  try { response = await fetch(`${baseUrl}${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...init?.headers } }); }
+  catch { throw new ApiError('Não foi possível conectar à API. Verifique se o serviço está disponível e tente novamente.'); }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new ApiError(body.error ?? `Não foi possível concluir a solicitação (${response.status}).`, response.status);
@@ -35,7 +37,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function upload<T>(path: string, body: FormData): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, { method: 'POST', body });
+  let response: Response;
+  try { response = await fetch(`${baseUrl}${path}`, { method: 'POST', body }); }
+  catch { throw new ApiError('Não foi possível enviar os arquivos porque a API não está disponível.'); }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new ApiError(payload.error ?? `Não foi possível enviar os arquivos (${response.status}).`, response.status);
@@ -76,11 +80,20 @@ export const api = {
 
 export async function waitForJob(job: ApiJob, onUpdate: (job: ApiJob) => void): Promise<ApiJob> {
   let current = job;
+  let consecutiveNetworkFailures = 0;
   onUpdate(current);
   while (current.status === 'queued' || current.status === 'running') {
     await new Promise(resolve => window.setTimeout(resolve, 700));
-    current = await api.job(current.id);
-    onUpdate(current);
+    try {
+      current = await api.job(current.id);
+      consecutiveNetworkFailures = 0;
+      onUpdate(current);
+    } catch (reason) {
+      consecutiveNetworkFailures += 1;
+      onUpdate({ ...current, message: `Conexão instável. Tentando novamente (${consecutiveNetworkFailures}/8)…` });
+      if (consecutiveNetworkFailures >= 8) throw new ApiError(`Não foi possível consultar o processamento. Verifique a conexão com a API e tente novamente. Job: ${current.id}`);
+      await new Promise(resolve => window.setTimeout(resolve, 1000 * consecutiveNetworkFailures));
+    }
   }
   if (current.status === 'failed') throw new ApiError(current.error ?? current.message);
   return current;

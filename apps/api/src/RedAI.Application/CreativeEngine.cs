@@ -24,14 +24,30 @@ public sealed record CreativeBrief(
     IReadOnlyList<string> PaletteRecommendation,
     IReadOnlyList<string> Hierarchy,
     string LogoPlacement,
-    IReadOnlyList<string> Avoid)
+    IReadOnlyList<string> Avoid,
+    string VisualMode,
+    bool RequiresAuthenticAsset,
+    string? AuthenticAssetReason,
+    string VisualDensity,
+    decimal NegativeSpaceTarget,
+    int MaxVisualElements)
 {
+    private static readonly IReadOnlySet<string> VisualModes = new HashSet<string>(StringComparer.Ordinal)
+    { "TYPOGRAPHIC", "ABSTRACT", "PRODUCT", "GENERIC_LIFESTYLE", "AUTHENTIC_ASSET_REQUIRED" };
+    private static readonly IReadOnlySet<string> VisualDensities = new HashSet<string>(StringComparer.Ordinal)
+    { "LOW", "MEDIUM", "HIGH" };
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Purpose)) throw new ArgumentException("Creative brief purpose is required.");
         if (!CreativeTemplates.IsSupported(Template)) throw new ArgumentException($"Unsupported creative template '{Template}'.");
         if (string.IsNullOrWhiteSpace(ImageDirection) || string.IsNullOrWhiteSpace(Composition)) throw new ArgumentException("Image direction and composition are required.");
         if (Mood.Count == 0 || Hierarchy.Count == 0 || Avoid.Count == 0) throw new ArgumentException("Mood, hierarchy and avoid must not be empty.");
+        if (!VisualModes.Contains(VisualMode)) throw new ArgumentException($"Unsupported visual mode '{VisualMode}'.");
+        if (!VisualDensities.Contains(VisualDensity)) throw new ArgumentException($"Unsupported visual density '{VisualDensity}'.");
+        if (NegativeSpaceTarget is < 0 or > 0.8m) throw new ArgumentOutOfRangeException(nameof(NegativeSpaceTarget), "Negative space target must be between 0 and 0.8.");
+        if (MaxVisualElements is < 1 or > 6) throw new ArgumentOutOfRangeException(nameof(MaxVisualElements), "Max visual elements must be between 1 and 6.");
+        if (RequiresAuthenticAsset && string.IsNullOrWhiteSpace(AuthenticAssetReason)) throw new ArgumentException("An authentic asset reason is required when an authentic asset is required.");
     }
 }
 

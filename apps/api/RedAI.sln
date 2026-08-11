@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Domain", "src\RedAI.D
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Infrastructure", "src\RedAI.Infrastructure\RedAI.Infrastructure.csproj", "{8C290286-3559-47DE-A456-8FD71D90DDFB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Application.Tests", "tests\RedAI.Application.Tests\RedAI.Application.Tests.csproj", "{C4C73EA4-79A1-4C1F-AF38-31987A3BC52B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,5 +34,9 @@ Global
 		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C4C73EA4-79A1-4C1F-AF38-31987A3BC52B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C4C73EA4-79A1-4C1F-AF38-31987A3BC52B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C4C73EA4-79A1-4C1F-AF38-31987A3BC52B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C4C73EA4-79A1-4C1F-AF38-31987A3BC52B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

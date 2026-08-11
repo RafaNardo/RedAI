@@ -14,7 +14,7 @@ export type ApiStrategy = { campaignName: string; strategicObjective: string; ra
 export type ApiIdea = { id: string; ordinal: number; title: string; pillar: string; contentType: string; description: string; selected: boolean };
 export type ApiContent = { contentId: string; revisionId: string; sequence: number; headline: string; supportingText?: string; caption: string; cta?: string; visualDirection?: string; version: number; isApproved: boolean };
 export type ApiContentRevision = { id: string; contentItemId: string; version: number; headline: string; supportingText?: string; caption: string; cta?: string; visualDirection?: string; isApproved: boolean };
-export type ApiCreativeVersion = { id: string; version: number; imageStorageKey?: string; isSelected: boolean };
+export type ApiCreativeVersion = { id: string; version: number; imageStorageKey?: string; isSelected: boolean; revisionInstruction?: string };
 export type ApiBrandProfile = { visualIdentity: { colors?: { hex: string }[] }; voice: { traits?: string[]; avoid?: string[] }; audiences?: { name: string }[]; products?: { name: string }[]; contentAnalysis?: { recommendations?: string[] }; restrictions?: string[] };
 export type ApiHealth = { status: string; aiMode: string };
 

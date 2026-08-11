@@ -1,5 +1,6 @@
 export type ApiJob = {
   id: string;
+  type: string;
   status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
   progress: number;
   completedSteps: number;
@@ -66,6 +67,7 @@ export const api = {
   ideas: (campaignId: string) => request<ApiIdea[]>(`/campaigns/${campaignId}/ideas`),
   selectIdeas: (campaignId: string, ideaIds: string[]) => request<ApiIdea[]>(`/campaigns/${campaignId}/ideas/select`, { method: 'POST', body: JSON.stringify({ ideaIds }) }),
   generateContent: (campaignId: string) => request<ApiJob>(`/campaigns/${campaignId}/content/generate`, { method: 'POST' }),
+  activeCampaignJob: (campaignId: string) => request<ApiJob | undefined>(`/campaigns/${campaignId}/job/active`),
   activeContentJob: (campaignId: string) => request<ApiJob | undefined>(`/campaigns/${campaignId}/content/job`),
   content: (campaignId: string) => request<ApiContent[]>(`/campaigns/${campaignId}/content`),
   contentItem: (contentId: string) => request<{ item: { id: string }; revisions: ApiContentRevision[] }>(`/content/${contentId}`),

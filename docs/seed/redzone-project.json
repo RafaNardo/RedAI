@@ -3,6 +3,6 @@
   "instagramHandle": "@redzonemkt",
   "currentStep": "creative_review",
   "status": "active",
-  "campaign": {"name": "Posicionamento de marca", "targetCount": 12},
+  "campaign": {"name": "Posicionamento de marca", "targetCount": 5},
   "demoNote": "Use reference/redzone images as source evidence during demo/reset. Seed actual generated entities through application code rather than importing this file blindly."
 }

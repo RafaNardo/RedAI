@@ -8,7 +8,7 @@ export type ApiJob = {
   error?: string;
 };
 
-export type ApiProject = { id: string; name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string; currentStep: string; status: string };
+export type ApiProject = { id: string; name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string; currentStep: string; status: string; campaign?: ApiCampaign };
 export type ApiCampaign = { id: string; projectId: string; name: string; objective: string; targetCount: number; context?: string };
 export type ApiStrategy = { campaignName: string; strategicObjective: string; rationale: string; contentMix: { pillar: string; percentage: number }[]; pillars: { id: string; name: string; description: string }[]; targetAudiences: string[]; messages: string[]; creativeDirection: { style: string[]; recommendations: string[]; avoid: string[] }; avoid: string[] };
 export type ApiIdea = { id: string; ordinal: number; title: string; pillar: string; contentType: string; description: string; selected: boolean };
@@ -49,6 +49,7 @@ async function upload<T>(path: string, body: FormData): Promise<T> {
 
 export const api = {
   health: () => request<ApiHealth>('/health'),
+  projects: () => request<ApiProject[]>('/projects'),
   resetDemo: () => request<void>('/demo/reset', { method: 'POST' }),
   createProject: (body: { name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string }) => request<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(body) }),
   project: (projectId: string) => request<ApiProject & { campaign?: ApiCampaign }>(`/projects/${projectId}`),

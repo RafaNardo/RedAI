@@ -102,7 +102,7 @@ api.MapPost("/campaigns/{id:guid}/ideas/select", async (Guid id, SelectIdeas r, 
 api.MapPost("/campaigns/{id:guid}/ideas/auto-select", async (Guid id, RedAIDbContext db) => await SelectIdeas(db, id, (await db.ContentIdeas.Where(i => i.CampaignId == id).OrderBy(i => i.Ordinal).Take(1).Select(i => i.Id).ToArrayAsync())));
 api.MapPost("/campaigns/{id:guid}/ideas/regenerate", async (Guid id, RedAIDbContext db, JobQueue jobs, IConfiguration configuration) => await GenerateRoutes(db, jobs, configuration, id));
 
-api.MapPost("/campaigns/{id:guid}/content/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateContent(db, jobs, id));
+api.MapPost("/campaigns/{id:guid}/content/generate", async (Guid id, RedAIDbContext db, JobQueue jobs, IConfiguration configuration) => await GenerateContent(db, jobs, configuration, id));
 api.MapGet("/campaigns/{id:guid}/content", async (Guid id, RedAIDbContext db) => Results.Ok(await db.ContentItems.Where(x => x.CampaignId == id).OrderBy(x => x.Sequence).Select(x => new { contentId = x.Id, x.Sequence, revision = db.ContentRevisions.Where(r => r.ContentItemId == x.Id).OrderByDescending(r => r.Version).Select(r => new { revisionId = r.Id, r.Headline, r.SupportingText, r.Caption, r.Cta, r.VisualDirection, r.Version, r.IsApproved }).First() }).Select(x => new { x.contentId, x.Sequence, x.revision.revisionId, x.revision.Headline, x.revision.SupportingText, x.revision.Caption, x.revision.Cta, x.revision.VisualDirection, x.revision.Version, x.revision.IsApproved }).ToListAsync()));
 api.MapGet("/content/{id:guid}", async (Guid id, RedAIDbContext db) => await db.ContentItems.FindAsync(id) is { } item ? Results.Ok(new { item, revisions = await db.ContentRevisions.Where(r => r.ContentItemId == id).OrderBy(r => r.Version).ToListAsync() }) : Results.NotFound());
 api.MapPost("/content/{id:guid}/revise", async (Guid id, ReviseRequest r, RedAIDbContext db, IAIClient ai, IContractSchemaCatalog schemas, CancellationToken ct) => await Revise(db, ai, schemas, id, r, ct));
@@ -196,7 +196,7 @@ static async Task<IResult> GenerateRoutes(RedAIDbContext db, JobQueue jobs, ICon
     });
 }
 static async Task<IResult> SelectIdeas(RedAIDbContext db, Guid id, Guid[] ids) { if (ids.Distinct().Count() > 1) return Results.BadRequest(new { error = "Selecione uma única rota de campanha." }); var ideas = await db.ContentIdeas.Where(i => i.CampaignId == id).ToListAsync(); if (ideas.Count == 0 || ids.Any(x => ideas.All(i => i.Id != x))) return Results.BadRequest(new { error = "A rota precisa pertencer à campanha." }); foreach (var i in ideas) i.Selected = ids.Contains(i.Id); await db.SaveChangesAsync(); return Results.Ok(ideas.Where(i => i.Selected)); }
-static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Guid id)
+static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, IConfiguration configuration, Guid id)
 {
     var routes = await db.ContentIdeas.Where(route => route.CampaignId == id && route.Selected).OrderBy(route => route.Ordinal).ToListAsync();
     if (routes.Count != 1) return Results.BadRequest(new { error = "A campanha precisa de exatamente uma rota selecionada." });
@@ -221,7 +221,7 @@ static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Gui
                 "content-generation",
                 "Você é o ContentGenerator do RED AI. Crie uma única copy social em português brasileiro para um post estático da série de campanha. Os cinco posts devem ser complementares, sem repetir headline nem legenda. A headline precisa refletir o papel editorial específico deste post. Não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.",
                 new { route = new { route.Title, route.Promise, route.TargetAudience, route.CreativeAngle, route.VisualDirection, route.Pillar, route.ContentType, route.Description }, series = new { postNumber = sequence, totalPosts = 5, editorialRole = roles[sequence - 1] }, headlinesToAvoid = headlinesToAvoid?.ToArray() ?? [] },
-                "content-revision", copySchemas.Load("content-revision")), ct);
+                "content-revision", copySchemas.Load("content-revision"), Model: configuration["AI:Models:Content"] ?? configuration["AI:Models:Fast"] ?? "gpt-5-mini"), ct);
             var copy = output.Deserialize<GeneratedCopy>() ?? throw new InvalidOperationException("ContentGenerator returned no copy.");
             if (string.IsNullOrWhiteSpace(copy.Headline) || string.IsNullOrWhiteSpace(copy.Caption) || string.IsNullOrWhiteSpace(copy.VisualDirection))
                 throw new InvalidOperationException("ContentGenerator returned an incomplete copy.");
@@ -293,10 +293,13 @@ static async Task MaterializeCreatives(RedAIDbContext db, IServiceScopeFactory s
         var storage = renderScope.ServiceProvider.GetRequiredService<IAssetStorage>();
         var renderer = renderScope.ServiceProvider.GetRequiredService<IDeterministicCreativeRenderer>();
         var brief = await CreateCreativeBrief(ai, schemas, campaign, revision, item.Sequence, palette, ct);
-        var asset = brief.ImageRequired ? await GenerateVisualAsset(ai, storage, campaign.ProjectId, item.Id, 1, brief.ImageDirection, ct) : null;
+        // In OpenAI mode the image model owns the final composition. A separate
+        // background generation would be unused and would double both cost and latency.
+        var asset = ai.Mode == "openai" ? null : brief.ImageRequired ? await GenerateVisualAsset(ai, storage, campaign.ProjectId, item.Id, 1, brief.ImageDirection, ct) : null;
         var layout = new CreativeLayout(brief.Template, palette, new CreativeHeadline(revision.Headline, brief.Template is "minimal-center" or "statement" ? "center" : "left", brief.Template is "editorial-bold" or "statement" ? "2xl" : "xl", []), new CreativeLogo(brief.LogoPlacement), revision.SupportingText, revision.Cta, asset);
         var key = $"projects/{campaign.ProjectId}/content/{item.Id}/creatives/v1/final.png";
-        await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct);
+        if (ai.Mode == "openai") await GenerateFinalCreativeAsset(ai, storage, campaign.ProjectId, item.Id, 1, revision, layout, null, key, ct);
+        else await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct);
         context.CreativeVersions.Add(new CreativeVersion { ContentItemId = item.Id, Version = 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key });
         await context.SaveChangesAsync(ct);
     }
@@ -315,9 +318,65 @@ static async Task MaterializeCreatives(RedAIDbContext db, IServiceScopeFactory s
         await db.SaveChangesAsync(ct);
     }
 }
-static async Task<CreativeBrief> CreateCreativeBrief(IAIClient ai, IContractSchemaCatalog schemas, Campaign campaign, ContentRevision revision, int sequence, CreativePalette palette, CancellationToken ct) { if (ai.Mode == "mock") return new CreativeBrief("Comunicação de marca", (sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }, false, "Sem imagem gerada", "Tipografia editorial", ["claro"], [palette.Background, palette.Primary, palette.Accent], ["headline", "apoio", "cta"], "rodapé", ["texto em imagem"]); using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("creative-brief", "Você é o Creative Director do RED AI. Crie um brief visual para post social. Decida se uma imagem gerada agrega valor. A imagem, se usada, será apenas fundo: nunca peça tipografia, logo ou CTA nela. Responda estritamente no schema.", new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, content = new { revision.Headline, revision.SupportingText, revision.Caption, revision.Cta, revision.VisualDirection }, palette }, "creative-brief", schemas.Load("creative-brief")), ct); return output.Deserialize<CreativeBrief>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("Creative Director returned no brief."); }
+static async Task<CreativeBrief> CreateCreativeBrief(IAIClient ai, IContractSchemaCatalog schemas, Campaign campaign, ContentRevision revision, int sequence, CreativePalette palette, CancellationToken ct) { if (ai.Mode == "mock") return new CreativeBrief("Comunicação de marca", (sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }, false, "Sem imagem gerada", "Tipografia editorial", ["claro"], [palette.Background, palette.Primary, palette.Accent], ["headline", "apoio", "cta"], "rodapé", ["texto em imagem"]); using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("creative-brief", "Você é o Creative Director do RED AI. Crie um brief visual para o post social final. A geração final pode renderizar a tipografia, mas o brief deve definir a hierarquia, paleta, composição e direção de arte, sem inventar texto adicional. Responda estritamente no schema.", new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, content = new { revision.Headline, revision.SupportingText, revision.Caption, revision.Cta, revision.VisualDirection }, palette }, "creative-brief", schemas.Load("creative-brief")), ct); return output.Deserialize<CreativeBrief>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("Creative Director returned no brief."); }
 static async Task<string?> GenerateVisualAsset(IAIClient ai, IAssetStorage storage, Guid projectId, Guid contentItemId, int version, string direction, CancellationToken ct) { if (ai.Mode != "openai") return null; var prompt = $"Create a premium editorial background photograph for a Brazilian brand social post. Direction: {direction}. No text, no lettering, no typography, no words, no logo, no brand mark, no watermark, no signature, no UI, no borders. Leave clear negative space for a separate renderer to add copy."; var key = $"projects/{projectId}/content/{contentItemId}/visuals/v{version}/background.png"; return (await new VisualAssetGenerator(ai, storage).GenerateAndStoreAsync(new ImageGenerationRequest("creative-visual", prompt), key, ct)).Asset.StorageKey; }
-static async Task ReviseCreative(RedAIDbContext db, IAIClient ai, IContractSchemaCatalog schemas, IAssetStorage storage, IDeterministicCreativeRenderer renderer, Guid contentItemId, string instruction, CancellationToken ct) { if (string.IsNullOrWhiteSpace(instruction)) throw new ArgumentException("A instrução de revisão é obrigatória."); var current = await db.CreativeVersions.Where(item => item.ContentItemId == contentItemId).OrderByDescending(item => item.Version).FirstOrDefaultAsync(ct) ?? throw new KeyNotFoundException("Creative version not found."); var item = await db.ContentItems.FindAsync([contentItemId], ct) ?? throw new KeyNotFoundException(); var revision = await db.ContentRevisions.FindAsync([current.SourceContentRevisionId], ct) ?? throw new KeyNotFoundException(); var layout = JsonSerializer.Deserialize<CreativeLayout>(current.LayoutJson) ?? throw new InvalidOperationException("Creative layout is invalid."); var plan = await CreateRevisionPlan(ai, schemas, instruction, layout, ct); var changes = (plan.Actions ?? []).Select(action => action.Type).ToHashSet(); if (changes.Contains("CHANGE_TYPOGRAPHY")) layout = layout with { Headline = layout.Headline with { Size = "lg" } }; if (changes.Contains("CHANGE_LAYOUT")) layout = layout with { Template = "minimal-center", Headline = layout.Headline with { Alignment = "center" } }; if (changes.Contains("CHANGE_COLORS")) layout = layout with { Palette = new CreativePalette("#F5F1E8", layout.Palette.Primary, layout.Palette.Accent) }; if (changes.Contains("REGENERATE_IMAGE") || changes.Contains("CHANGE_ASSET")) layout = layout with { BackgroundAssetKey = await GenerateVisualAsset(ai, storage, (await db.Campaigns.FindAsync([item.CampaignId], ct))!.ProjectId, contentItemId, current.Version + 1, plan.Summary, ct) }; var key = $"projects/{(await db.Campaigns.FindAsync([item.CampaignId], ct))!.ProjectId}/content/{contentItemId}/creatives/v{current.Version + 1}/final.png"; await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct); db.CreativeVersions.Add(new CreativeVersion { ContentItemId = contentItemId, Version = current.Version + 1, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key, RevisionInstruction = instruction }); await db.SaveChangesAsync(ct); }
+static async Task GenerateFinalCreativeAsset(IAIClient ai, IAssetStorage storage, Guid projectId, Guid contentItemId, int version, ContentRevision revision, CreativeLayout layout, string? revisionInstruction, string key, CancellationToken ct)
+{
+    if (ai.Mode != "openai") throw new InvalidOperationException("Final AI creative rendering requires AI_MODE=openai.");
+
+    var revisionContext = string.IsNullOrWhiteSpace(revisionInstruction)
+        ? ""
+        : $"\nApply this visual revision faithfully: {revisionInstruction}\n";
+    var prompt = $"""
+Create one polished final 4:5 portrait social-media PNG for a Brazilian brand. This is a finished commercial creative, not a wireframe or a background.
+
+Use modern editorial typography, excellent Portuguese accent rendering, clean line wrapping, safe margins, strong visual hierarchy and generous contrast. Use the supplied brand palette and art direction. The headline is the dominant element; supporting text and CTA are secondary. Compose the visual around the exact content below.
+
+Do not add any words beyond the supplied copy. Do not invent a logo, brand mark, watermark, signature, UI chrome, border, phone frame, or RED AI branding. Do not use placeholder or gibberish text.
+""" + $"""
+
+Template intent: {layout.Template}
+Palette: background {layout.Palette.Background}; primary {layout.Palette.Primary}; accent {layout.Palette.Accent}
+Art direction: {revision.VisualDirection}
+{revisionContext}
+Render only this exact Portuguese copy, preserving spelling, accents, punctuation and meaning:
+HEADLINE: {revision.Headline}
+SUPPORTING TEXT: {revision.SupportingText ?? "(omit)"}
+CTA: {revision.Cta ?? "(omit)"}
+""";
+
+    await new VisualAssetGenerator(ai, storage).GenerateAndStoreAsync(
+        new ImageGenerationRequest("final-creative", prompt, "1024x1536", "high"), key, ct);
+}
+static async Task ReviseCreative(RedAIDbContext db, IAIClient ai, IContractSchemaCatalog schemas, IAssetStorage storage, IDeterministicCreativeRenderer renderer, Guid contentItemId, string instruction, CancellationToken ct)
+{
+    if (string.IsNullOrWhiteSpace(instruction)) throw new ArgumentException("A instrução de revisão é obrigatória.");
+
+    var current = await db.CreativeVersions.Where(item => item.ContentItemId == contentItemId).OrderByDescending(item => item.Version).FirstOrDefaultAsync(ct)
+        ?? throw new KeyNotFoundException("Creative version not found.");
+    var item = await db.ContentItems.FindAsync([contentItemId], ct) ?? throw new KeyNotFoundException();
+    var campaign = await db.Campaigns.FindAsync([item.CampaignId], ct) ?? throw new KeyNotFoundException();
+    var revision = await db.ContentRevisions.FindAsync([current.SourceContentRevisionId], ct) ?? throw new KeyNotFoundException();
+    var layout = JsonSerializer.Deserialize<CreativeLayout>(current.LayoutJson) ?? throw new InvalidOperationException("Creative layout is invalid.");
+    var plan = await CreateRevisionPlan(ai, schemas, instruction, layout, ct);
+    var changes = (plan.Actions ?? []).Select(action => action.Type).ToHashSet();
+
+    if (changes.Contains("CHANGE_TYPOGRAPHY")) layout = layout with { Headline = layout.Headline with { Size = "lg" } };
+    if (changes.Contains("CHANGE_LAYOUT")) layout = layout with { Template = "minimal-center", Headline = layout.Headline with { Alignment = "center" } };
+    if (changes.Contains("CHANGE_COLORS")) layout = layout with { Palette = new CreativePalette("#F5F1E8", layout.Palette.Primary, layout.Palette.Accent) };
+    if (ai.Mode != "openai" && (changes.Contains("REGENERATE_IMAGE") || changes.Contains("CHANGE_ASSET")))
+        layout = layout with { BackgroundAssetKey = await GenerateVisualAsset(ai, storage, campaign.ProjectId, contentItemId, current.Version + 1, plan.Summary, ct) };
+
+    var version = current.Version + 1;
+    var key = $"projects/{campaign.ProjectId}/content/{contentItemId}/creatives/v{version}/final.png";
+    if (ai.Mode == "openai")
+        await GenerateFinalCreativeAsset(ai, storage, campaign.ProjectId, contentItemId, version, revision, layout, $"{instruction}\nPlano de direção: {plan.Summary}", key, ct);
+    else
+        await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct);
+
+    db.CreativeVersions.Add(new CreativeVersion { ContentItemId = contentItemId, Version = version, SourceContentRevisionId = revision.Id, LayoutJson = JsonSerializer.Serialize(layout), ImageStorageKey = key, RevisionInstruction = instruction });
+    await db.SaveChangesAsync(ct);
+}
 static async Task<CreativeRevisionPlan> CreateRevisionPlan(IAIClient ai, IContractSchemaCatalog schemas, string instruction, CreativeLayout layout, CancellationToken ct) { if (ai.Mode == "mock") { var action = instruction.Contains("foto", StringComparison.OrdinalIgnoreCase) || instruction.Contains("família", StringComparison.OrdinalIgnoreCase) ? "REGENERATE_IMAGE" : instruction.Contains("claro", StringComparison.OrdinalIgnoreCase) ? "CHANGE_COLORS" : "CHANGE_TYPOGRAPHY"; return new CreativeRevisionPlan(instruction, [new CreativeRevisionAction(action, instruction)]); } using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("creative-revision-plan", "Você é o Creative Director do RED AI. Produza um plano de revisão. Use REGENERATE_IMAGE ou CHANGE_ASSET somente se o usuário pedir para trocar a cena, pessoa, objeto ou foto. Para cor, espaço, tamanho ou template, não regenere imagem. Responda estritamente no schema.", new { instruction, layout }, "creative-revision-plan", schemas.Load("creative-revision-plan")), ct); return output.Deserialize<CreativeRevisionPlan>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("Creative revision plan missing."); }
 static async Task<CreativePalette> ResolveBrandPalette(RedAIDbContext db, Guid projectId, CancellationToken ct) { var profile = await db.BrandProfiles.AsNoTracking().FirstOrDefaultAsync(item => item.ProjectId == projectId, ct); if (profile is null) return new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F"); try { using var json = JsonDocument.Parse(profile.ProfileJson); var colors = json.RootElement.GetProperty("visualIdentity").GetProperty("colors").EnumerateArray().Select(color => color.GetProperty("hex").GetString()).Where(hex => !string.IsNullOrWhiteSpace(hex) && Regex.IsMatch(hex!, "^#[0-9A-Fa-f]{6}$")).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); return colors.Length switch { >= 3 => new CreativePalette(colors[0], colors[1], colors[2]), 2 => new CreativePalette(colors[0], colors[1], colors[0]), 1 => new CreativePalette(colors[0], "#F6F6F3", "#FF3D1F"), _ => new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F") }; } catch (JsonException) { return new CreativePalette("#0B0D10", "#F6F6F3", "#FF3D1F"); } }
 static async Task<IResult> Seed(RedAIDbContext db, string name, string handle) { var p = new Project { Name = name, InstagramHandle = handle, CurrentStep = "sources" }; db.Projects.Add(p); await db.SaveChangesAsync(); return Results.Ok(p); }

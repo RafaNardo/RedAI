@@ -11,6 +11,7 @@ export type ApiProject = { id: string; name: string; instagramHandle?: string; w
 export type ApiCampaign = { id: string; projectId: string; name: string; objective: string; targetCount: number; context?: string };
 export type ApiIdea = { id: string; ordinal: number; title: string; pillar: string; contentType: string; description: string; selected: boolean };
 export type ApiContent = { id: string; sequence: number; headline: string; caption: string; cta?: string; visualDirection?: string; version: number };
+export type ApiHealth = { status: string; aiMode: string };
 
 const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:5080/api';
 
@@ -38,6 +39,7 @@ async function upload<T>(path: string, body: FormData): Promise<T> {
 }
 
 export const api = {
+  health: () => request<ApiHealth>('/health'),
   createProject: (body: { name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string }) => request<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(body) }),
   uploadSources: (projectId: string, files: File[]) => { const form = new FormData(); files.forEach(file => form.append('files', file, file.name)); return upload(`/projects/${projectId}/sources`, form); },
   analyzeBrand: (projectId: string) => request<ApiJob>(`/projects/${projectId}/brand/analyze`, { method: 'POST' }),

@@ -96,11 +96,11 @@ api.MapGet("/campaigns/{id:guid}/strategy", async (Guid id, RedAIDbContext db) =
 api.MapPut("/campaigns/{id:guid}/strategy", async (Guid id, JsonElement strategy, RedAIDbContext db) => await SaveStrategy(db, id, strategy.GetRawText()));
 api.MapPost("/campaigns/{id:guid}/strategy/approve", async (Guid id, RedAIDbContext db) => await ApproveStrategy(db, id));
 
-api.MapPost("/campaigns/{id:guid}/ideas/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateRoutes(db, jobs, id));
+api.MapPost("/campaigns/{id:guid}/ideas/generate", async (Guid id, RedAIDbContext db, JobQueue jobs, IConfiguration configuration) => await GenerateRoutes(db, jobs, configuration, id));
 api.MapGet("/campaigns/{id:guid}/ideas", async (Guid id, RedAIDbContext db) => !await db.Campaigns.AnyAsync(c => c.Id == id) ? Results.NotFound() : Results.Ok(await db.ContentIdeas.Where(i => i.CampaignId == id).OrderBy(i => i.Ordinal).ToListAsync()));
 api.MapPost("/campaigns/{id:guid}/ideas/select", async (Guid id, SelectIdeas r, RedAIDbContext db) => await SelectIdeas(db, id, r.IdeaIds));
 api.MapPost("/campaigns/{id:guid}/ideas/auto-select", async (Guid id, RedAIDbContext db) => await SelectIdeas(db, id, (await db.ContentIdeas.Where(i => i.CampaignId == id).OrderBy(i => i.Ordinal).Take(1).Select(i => i.Id).ToArrayAsync())));
-api.MapPost("/campaigns/{id:guid}/ideas/regenerate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateRoutes(db, jobs, id));
+api.MapPost("/campaigns/{id:guid}/ideas/regenerate", async (Guid id, RedAIDbContext db, JobQueue jobs, IConfiguration configuration) => await GenerateRoutes(db, jobs, configuration, id));
 
 api.MapPost("/campaigns/{id:guid}/content/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateContent(db, jobs, id));
 api.MapGet("/campaigns/{id:guid}/content", async (Guid id, RedAIDbContext db) => Results.Ok(await db.ContentItems.Where(x => x.CampaignId == id).OrderBy(x => x.Sequence).Select(x => new { contentId = x.Id, x.Sequence, revision = db.ContentRevisions.Where(r => r.ContentItemId == x.Id).OrderByDescending(r => r.Version).Select(r => new { revisionId = r.Id, r.Headline, r.SupportingText, r.Caption, r.Cta, r.VisualDirection, r.Version, r.IsApproved }).First() }).Select(x => new { x.contentId, x.Sequence, x.revision.revisionId, x.revision.Headline, x.revision.SupportingText, x.revision.Caption, x.revision.Cta, x.revision.VisualDirection, x.revision.Version, x.revision.IsApproved }).ToListAsync()));
@@ -146,7 +146,7 @@ static async Task<IResult> ApproveBrand(RedAIDbContext db, Guid id) { var p = aw
 static async Task<IResult> SaveStrategy(RedAIDbContext db, Guid id, string json) { if (!await db.Campaigns.AnyAsync(x => x.Id == id)) return Results.NotFound(); var s = await db.CampaignStrategies.FirstOrDefaultAsync(x => x.CampaignId == id); if (s is null) db.CampaignStrategies.Add(new CampaignStrategy { CampaignId = id, StrategyJson = json }); else { s.StrategyJson = json; s.UpdatedAt = DateTimeOffset.UtcNow; } await db.SaveChangesAsync(); return Results.Ok(JsonDocument.Parse(json).RootElement); }
 static async Task MaterializeStrategy(RedAIDbContext db, IAIClient ai, IContractSchemaCatalog schemas, Guid id, CancellationToken ct) { var c = await db.Campaigns.FindAsync([id], ct) ?? throw new KeyNotFoundException(); var brand = await db.BrandProfiles.FirstOrDefaultAsync(x => x.ProjectId == c.ProjectId, ct) ?? throw new InvalidOperationException("Brand DNA must be generated before strategy."); if (brand.Status != "approved") throw new InvalidOperationException("Brand DNA must be approved before strategy."); var json = ai.Mode == "mock" ? JsonSerializer.Serialize(new { campaignName = c.Name, strategicObjective = c.Objective, rationale = "Estratégia demonstrativa baseada no Brand DNA aprovado.", contentMix = new[] { new { pillar = "Autoridade", percentage = 34 }, new { pillar = "Educação", percentage = 33 }, new { pillar = "Conversão", percentage = 33 } }, pillars = new[] { new { id = "authority", name = "Autoridade", description = "Constrói confiança" }, new { id = "education", name = "Educação", description = "Explica escolhas" }, new { id = "conversion", name = "Conversão", description = "Convida ao contato" } }, targetAudiences = new[] { "Decisores" }, messages = new[] { "Escolhas bem informadas" }, creativeDirection = new { style = new[] { "editorial" }, recommendations = new[] { "alto contraste" }, avoid = new[] { "promessas absolutas" } }, avoid = new[] { "jargão" } }) : (await ai.CompleteStructuredAsync(new StructuredTextRequest("strategy-generation", "Você é o CampaignStrategist do RED AI. Use exclusivamente o Brand DNA aprovado e o briefing. Responda estritamente no schema.", new { campaign = new { c.Name, c.Objective, c.TargetCount, c.Context }, brandDna = JsonDocument.Parse(brand.ProfileJson).RootElement }, "campaign-strategy", schemas.Load("campaign-strategy")), ct)).RootElement.GetRawText(); var strategy = await db.CampaignStrategies.FirstOrDefaultAsync(x => x.CampaignId == id, ct); if (strategy is null) db.CampaignStrategies.Add(new CampaignStrategy { CampaignId = id, StrategyJson = json }); else { strategy.StrategyJson = json; strategy.Status = "generated"; strategy.UpdatedAt = DateTimeOffset.UtcNow; } await db.SaveChangesAsync(ct); }
 static async Task<IResult> ApproveStrategy(RedAIDbContext db, Guid id) { var c = await db.Campaigns.FindAsync(id); var s = await db.CampaignStrategies.FirstOrDefaultAsync(x => x.CampaignId == id); if (c is null || s is null) return Results.NotFound(); c.StrategyApproved = true; s.Status = "approved"; await db.SaveChangesAsync(); return Results.Ok(c); }
-static async Task<IResult> GenerateRoutes(RedAIDbContext db, JobQueue jobs, Guid id)
+static async Task<IResult> GenerateRoutes(RedAIDbContext db, JobQueue jobs, IConfiguration configuration, Guid id)
 {
     if (!await db.Campaigns.AnyAsync(campaign => campaign.Id == id)) return Results.NotFound();
     if (!await db.CampaignStrategies.AnyAsync(strategy => strategy.CampaignId == id && strategy.Status == "approved")) return Results.BadRequest(new { error = "Strategy must be approved before routes." });
@@ -171,7 +171,7 @@ static async Task<IResult> GenerateRoutes(RedAIDbContext db, JobQueue jobs, Guid
                 "Você é o Campaign Route Director do RED AI. Gere exatamente 5 rotas de campanha distintas. Para cada rota, detalhe promessa, público, ângulo criativo e direção visual. A entrega final aceita somente Post estático: não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.",
                 new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, brandDna = JsonDocument.Parse((await context.BrandProfiles.FirstAsync(profile => profile.ProjectId == campaign.ProjectId, ct)).ProfileJson).RootElement, strategy = JsonDocument.Parse(strategy.StrategyJson).RootElement },
                 "ideas",
-                sp.GetRequiredService<IContractSchemaCatalog>().Load("ideas")), ct)).RootElement.GetProperty("ideas").EnumerateArray().Select(item => new {
+                sp.GetRequiredService<IContractSchemaCatalog>().Load("ideas"), Model: configuration["AI:Models:Routes"] ?? configuration["AI:Models:Fast"] ?? "gpt-5-mini"), ct)).RootElement.GetProperty("ideas").EnumerateArray().Select(item => new {
                     title = item.GetProperty("title").GetString() ?? string.Empty,
                     promise = item.GetProperty("promise").GetString() ?? string.Empty,
                     targetAudience = item.GetProperty("targetAudience").GetString() ?? string.Empty,
@@ -209,7 +209,7 @@ static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Gui
         var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
         var roles = new[] { "abertura da promessa", "educação prática", "prova de relevância", "aplicação no cotidiano", "convite para agir" };
 
-        async Task<GeneratedCopy> GenerateCopyAsync(int sequence)
+        async Task<GeneratedCopy> GenerateCopyAsync(int sequence, IReadOnlyCollection<string>? headlinesToAvoid = null)
         {
             using var copyScope = scopeFactory.CreateScope();
             var copyAi = copyScope.ServiceProvider.GetRequiredService<IAIClient>();
@@ -219,8 +219,8 @@ static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Gui
             var copySchemas = copyScope.ServiceProvider.GetRequiredService<IContractSchemaCatalog>();
             using var output = await copyAi.CompleteStructuredAsync(new StructuredTextRequest(
                 "content-generation",
-                "Você é o ContentGenerator do RED AI. Crie uma única copy social em português brasileiro para um post estático da série de campanha. Os cinco posts devem ser complementares, sem repetir headline nem legenda. Não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.",
-                new { route = new { route.Title, route.Promise, route.TargetAudience, route.CreativeAngle, route.VisualDirection, route.Pillar, route.ContentType, route.Description }, series = new { postNumber = sequence, totalPosts = 5, editorialRole = roles[sequence - 1] } },
+                "Você é o ContentGenerator do RED AI. Crie uma única copy social em português brasileiro para um post estático da série de campanha. Os cinco posts devem ser complementares, sem repetir headline nem legenda. A headline precisa refletir o papel editorial específico deste post. Não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.",
+                new { route = new { route.Title, route.Promise, route.TargetAudience, route.CreativeAngle, route.VisualDirection, route.Pillar, route.ContentType, route.Description }, series = new { postNumber = sequence, totalPosts = 5, editorialRole = roles[sequence - 1] }, headlinesToAvoid = headlinesToAvoid?.ToArray() ?? [] },
                 "content-revision", copySchemas.Load("content-revision")), ct);
             var copy = output.Deserialize<GeneratedCopy>() ?? throw new InvalidOperationException("ContentGenerator returned no copy.");
             if (string.IsNullOrWhiteSpace(copy.Headline) || string.IsNullOrWhiteSpace(copy.Caption) || string.IsNullOrWhiteSpace(copy.VisualDirection))
@@ -241,7 +241,13 @@ static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Gui
             var (sequence, copyTask) = pending[index];
             pending.RemoveAt(index);
             var copy = await copyTask;
-            if (!headlines.Add(copy.Headline.Trim())) throw new InvalidOperationException("ContentGenerator returned duplicate headlines for the campaign series.");
+            var retries = 0;
+            while (headlines.Contains(copy.Headline.Trim()) && retries < 2)
+            {
+                retries++;
+                copy = await GenerateCopyAsync(sequence, headlines);
+            }
+            if (!headlines.Add(copy.Headline.Trim())) throw new InvalidOperationException("ContentGenerator returned duplicate headlines for the campaign series after retrying the affected post.");
 
             var item = new ContentItem { CampaignId = id, SourceIdeaId = route.Id, Sequence = sequence };
             context.ContentItems.Add(item);

@@ -99,7 +99,7 @@ api.MapPost("/campaigns/{id:guid}/strategy/approve", async (Guid id, RedAIDbCont
 api.MapPost("/campaigns/{id:guid}/ideas/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateRoutes(db, jobs, id));
 api.MapGet("/campaigns/{id:guid}/ideas", async (Guid id, RedAIDbContext db) => !await db.Campaigns.AnyAsync(c => c.Id == id) ? Results.NotFound() : Results.Ok(await db.ContentIdeas.Where(i => i.CampaignId == id).OrderBy(i => i.Ordinal).ToListAsync()));
 api.MapPost("/campaigns/{id:guid}/ideas/select", async (Guid id, SelectIdeas r, RedAIDbContext db) => await SelectIdeas(db, id, r.IdeaIds));
-api.MapPost("/campaigns/{id:guid}/ideas/auto-select", async (Guid id, RedAIDbContext db) => await SelectIdeas(db, id, (await db.ContentIdeas.Where(i => i.CampaignId == id).OrderBy(i => i.Ordinal).Take(5).Select(i => i.Id).ToArrayAsync())));
+api.MapPost("/campaigns/{id:guid}/ideas/auto-select", async (Guid id, RedAIDbContext db) => await SelectIdeas(db, id, (await db.ContentIdeas.Where(i => i.CampaignId == id).OrderBy(i => i.Ordinal).Take(1).Select(i => i.Id).ToArrayAsync())));
 api.MapPost("/campaigns/{id:guid}/ideas/regenerate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateRoutes(db, jobs, id));
 
 api.MapPost("/campaigns/{id:guid}/content/generate", async (Guid id, RedAIDbContext db, JobQueue jobs) => await GenerateContent(db, jobs, id));
@@ -155,15 +155,46 @@ static async Task<IResult> GenerateRoutes(RedAIDbContext db, JobQueue jobs, Guid
         var campaign = await context.Campaigns.FindAsync([id], ct) ?? throw new KeyNotFoundException();
         var strategy = await context.CampaignStrategies.FirstAsync(item => item.CampaignId == id && item.Status == "approved", ct);
         var routes = ai.Mode == "mock"
-            ? Enumerable.Range(1, 5).Select(index => new { title = $"Rota de campanha {index:00}", pillar = index % 2 == 0 ? "Educação" : "Autoridade", contentType = "Post estático", description = "Promessa clara para o público prioritário, com direção visual editorial e humana." }).ToArray()
-            : (await ai.CompleteStructuredAsync(new StructuredTextRequest("campaign-routes-generation", "Você é o Campaign Route Director do RED AI. Gere exatamente 5 rotas de campanha distintas. Cada rota deve apresentar promessa, público, ângulo criativo e direção visual em sua descrição. A entrega final aceita somente Post estático: não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.", new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, brandDna = JsonDocument.Parse((await context.BrandProfiles.FirstAsync(profile => profile.ProjectId == campaign.ProjectId, ct)).ProfileJson).RootElement, strategy = JsonDocument.Parse(strategy.StrategyJson).RootElement }, "ideas", sp.GetRequiredService<IContractSchemaCatalog>().Load("ideas")), ct)).RootElement.GetProperty("ideas").EnumerateArray().Select(item => new { title = item.GetProperty("title").GetString() ?? string.Empty, pillar = item.GetProperty("pillar").GetString() ?? string.Empty, contentType = item.GetProperty("contentType").GetString() ?? string.Empty, description = item.GetProperty("description").GetString() ?? string.Empty }).ToArray();
-        if (routes.Length != 5 || routes.Select(route => route.title.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 5 || routes.Any(route => string.IsNullOrWhiteSpace(route.title) || string.IsNullOrWhiteSpace(route.pillar) || string.IsNullOrWhiteSpace(route.description) || route.contentType != "Post estático")) throw new InvalidOperationException("Campaign Route Director must return 5 unique static-post routes.");
+            ? Enumerable.Range(1, 5).Select(index => new {
+                title = $"Rota de campanha {index:00}",
+                promise = "Transformar planejamento em proteção concreta.",
+                targetAudience = "Famílias e decisores que buscam segurança para o futuro.",
+                creativeAngle = index % 2 == 0 ? "Educação prática" : "Proteção que cabe na vida real",
+                visualDirection = "Editorial humano, contraste forte e espaço para uma mensagem objetiva.",
+                pillar = index % 2 == 0 ? "Educação" : "Autoridade",
+                contentType = "Post estático",
+                description = "Uma rota coerente de cinco posts estáticos para a mesma campanha."
+            }).ToArray()
+            : (await ai.CompleteStructuredAsync(new StructuredTextRequest(
+                "campaign-routes-generation",
+                "Você é o Campaign Route Director do RED AI. Gere exatamente 5 rotas de campanha distintas. Para cada rota, detalhe promessa, público, ângulo criativo e direção visual. A entrega final aceita somente Post estático: não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.",
+                new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, brandDna = JsonDocument.Parse((await context.BrandProfiles.FirstAsync(profile => profile.ProjectId == campaign.ProjectId, ct)).ProfileJson).RootElement, strategy = JsonDocument.Parse(strategy.StrategyJson).RootElement },
+                "ideas",
+                sp.GetRequiredService<IContractSchemaCatalog>().Load("ideas")), ct)).RootElement.GetProperty("ideas").EnumerateArray().Select(item => new {
+                    title = item.GetProperty("title").GetString() ?? string.Empty,
+                    promise = item.GetProperty("promise").GetString() ?? string.Empty,
+                    targetAudience = item.GetProperty("targetAudience").GetString() ?? string.Empty,
+                    creativeAngle = item.GetProperty("creativeAngle").GetString() ?? string.Empty,
+                    visualDirection = item.GetProperty("visualDirection").GetString() ?? string.Empty,
+                    pillar = item.GetProperty("pillar").GetString() ?? string.Empty,
+                    contentType = item.GetProperty("contentType").GetString() ?? string.Empty,
+                    description = item.GetProperty("description").GetString() ?? string.Empty
+                }).ToArray();
+        if (routes.Length != 5 || routes.Select(route => route.title.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != 5 || routes.Any(route =>
+            string.IsNullOrWhiteSpace(route.title) || string.IsNullOrWhiteSpace(route.promise) ||
+            string.IsNullOrWhiteSpace(route.targetAudience) || string.IsNullOrWhiteSpace(route.creativeAngle) ||
+            string.IsNullOrWhiteSpace(route.visualDirection) || string.IsNullOrWhiteSpace(route.pillar) ||
+            string.IsNullOrWhiteSpace(route.description) || route.contentType != "Post estático"))
+            throw new InvalidOperationException("Campaign Route Director must return 5 unique static-post routes with all route details.");
         context.ContentIdeas.RemoveRange(context.ContentIdeas.Where(route => route.CampaignId == id));
-        context.ContentIdeas.AddRange(routes.Select((route, index) => new ContentIdea { CampaignId = id, Ordinal = index + 1, Title = route.title, Pillar = route.pillar, ContentType = route.contentType, Description = route.description }));
+        context.ContentIdeas.AddRange(routes.Select((route, index) => new ContentIdea {
+            CampaignId = id, Ordinal = index + 1, Title = route.title, Pillar = route.pillar, ContentType = route.contentType, Description = route.description,
+            Promise = route.promise, TargetAudience = route.targetAudience, CreativeAngle = route.creativeAngle, VisualDirection = route.visualDirection
+        }));
         await context.SaveChangesAsync(ct);
     });
 }
-static async Task<IResult> SelectIdeas(RedAIDbContext db, Guid id, Guid[] ids) { if (ids.Distinct().Count() > 5) return Results.BadRequest(new { error = "Selecione no máximo 5 ideias." }); var ideas = await db.ContentIdeas.Where(i => i.CampaignId == id).ToListAsync(); if (ideas.Count == 0 || ids.Any(x => ideas.All(i => i.Id != x))) return Results.BadRequest(new { error = "Ideas must belong to the campaign." }); foreach (var i in ideas) i.Selected = ids.Contains(i.Id); await db.SaveChangesAsync(); return Results.Ok(ideas.Where(i => i.Selected)); }
+static async Task<IResult> SelectIdeas(RedAIDbContext db, Guid id, Guid[] ids) { if (ids.Distinct().Count() > 1) return Results.BadRequest(new { error = "Selecione uma única rota de campanha." }); var ideas = await db.ContentIdeas.Where(i => i.CampaignId == id).ToListAsync(); if (ideas.Count == 0 || ids.Any(x => ideas.All(i => i.Id != x))) return Results.BadRequest(new { error = "A rota precisa pertencer à campanha." }); foreach (var i in ideas) i.Selected = ids.Contains(i.Id); await db.SaveChangesAsync(); return Results.Ok(ideas.Where(i => i.Selected)); }
 static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Guid id)
 {
     var ideas = await db.ContentIdeas.Where(i => i.CampaignId == id && i.Selected).OrderBy(i => i.Ordinal).ToListAsync();

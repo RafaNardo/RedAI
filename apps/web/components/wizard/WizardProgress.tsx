@@ -2,7 +2,7 @@ import type { Step } from '../../hooks/useRedAIWizard';
 
 const groups: [string, Step[]][] = [
   ['01 Marca', ['sources', 'analyzing', 'brand']], ['02 Estratégia', ['brief', 'planning', 'strategy']],
-  ['03 Ideias', ['ideating', 'ideas']], ['04 Conteúdo', ['generatingContent', 'content']], ['05 Artes', ['production', 'creatives']], ['06 Resultado', ['result']],
+  ['03 Rotas', ['ideating', 'ideas']], ['04 Conteúdo', ['generatingContent', 'content']], ['05 Artes', ['production', 'creatives']], ['06 Resultado', ['result']],
 ];
 
 export default function WizardProgress({ step }: { step: Step }) {

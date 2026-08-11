@@ -14,8 +14,8 @@ services:
       retries: 20
   api:
     build:
-      context: .
-      dockerfile: apps/api/src/RedAI.Api/Dockerfile
+      context: ./apps/api
+      dockerfile: Dockerfile
     environment:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=redai;Username=redai;Password=redai_dev

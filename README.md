@@ -42,3 +42,7 @@ O projeto é executado com Podman, não Docker:
 ```powershell
 podman compose -f compose.yml up --build
 ```
+
+## Railway
+
+Para a API, use `apps/api` como **Root Directory** e `Dockerfile` como **Dockerfile Path**. Não use `apps/api/src/RedAI.Api` como raiz: os projetos `Application`, `Domain` e `Infrastructure` são referências necessárias ao build.

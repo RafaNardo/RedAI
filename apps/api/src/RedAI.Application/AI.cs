@@ -15,7 +15,8 @@ public interface IAIClient
     Task<GeneratedImage> GenerateImageAsync(ImageGenerationRequest request, CancellationToken cancellationToken = default);
 }
 
-public sealed record StructuredTextRequest(string Operation, string Instructions, object Input, string SchemaName, JsonDocument Schema, string? Model = null);
+public sealed record StructuredImageInput(string Filename, string ContentType, byte[] Bytes);
+public sealed record StructuredTextRequest(string Operation, string Instructions, object Input, string SchemaName, JsonDocument Schema, string? Model = null, IReadOnlyList<StructuredImageInput>? Images = null);
 public sealed record ImageGenerationRequest(string Operation, string Prompt, string Size = "1024x1536", string Quality = "medium", string OutputFormat = "png", string? Model = null);
 public sealed record GeneratedImage(byte[] Bytes, string ContentType, string Model);
 public sealed record StoredGeneratedImage(StoredAsset Asset, string Model);
@@ -76,10 +77,10 @@ public sealed class OpenAIResponsesClient(HttpClient http, IConfiguration config
         // Responses uses text.format/json_schema for strict Structured Outputs.
         message.Content = JsonContent.Create(new {
             model, store = false, instructions = request.Instructions,
-            input = JsonSerializer.Serialize(request.Input),
+            input = BuildInput(request),
             text = new { format = new { type = "json_schema", name = request.SchemaName, strict = true, schema = JsonNode.Parse(request.Schema.RootElement.GetRawText()) } }
         });
-        try { using var response = await http.SendAsync(message, cancellationToken); response.EnsureSuccessStatusCode(); using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken)); var json = ExtractOutputText(body.RootElement); await CompleteRunAsync(runId, json, cancellationToken); return JsonDocument.Parse(json); }
+        try { using var response = await http.SendAsync(message, cancellationToken); if (!response.IsSuccessStatusCode) throw new HttpRequestException($"OpenAI Responses returned {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(cancellationToken)}", null, response.StatusCode); using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken)); var json = ExtractOutputText(body.RootElement); await CompleteRunAsync(runId, json, cancellationToken); return JsonDocument.Parse(json); }
         catch (Exception ex) { await FailRunAsync(runId, ex, cancellationToken); throw; }
     }
 
@@ -101,6 +102,15 @@ public sealed class OpenAIResponsesClient(HttpClient http, IConfiguration config
         return message;
     }
     private string Required(string key) => configuration[key] ?? throw new InvalidOperationException($"Server-side configuration '{key}' is required when AI_MODE=openai.");
+    private static object BuildInput(StructuredTextRequest request)
+    {
+        var content = new List<object> { new { type = "input_text", text = JsonSerializer.Serialize(request.Input) } };
+        foreach (var image in request.Images ?? [])
+        {
+            content.Add(new { type = "input_image", image_url = $"data:{image.ContentType};base64,{Convert.ToBase64String(image.Bytes)}", detail = "high" });
+        }
+        return new[] { new { role = "user", content } };
+    }
     private async Task<Guid?> StartRunAsync(string operation, string model, object input, CancellationToken ct)
     {
         if (runs is null) return null;

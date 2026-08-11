@@ -46,6 +46,7 @@ export const api = {
   uploadSources: (projectId: string, files: File[]) => { const form = new FormData(); files.forEach(file => form.append('files', file, file.name)); return upload(`/projects/${projectId}/sources`, form); },
   analyzeBrand: (projectId: string) => request<ApiJob>(`/projects/${projectId}/brand/analyze`, { method: 'POST' }),
   brand: (projectId: string) => request<ApiBrandProfile>(`/projects/${projectId}/brand`),
+  saveBrand: (projectId: string, profile: ApiBrandProfile) => request<ApiBrandProfile>(`/projects/${projectId}/brand`, { method: 'PUT', body: JSON.stringify(profile) }),
   approveBrand: (projectId: string) => request(`/projects/${projectId}/brand/approve`, { method: 'POST' }),
   createCampaign: (projectId: string, body: { name: string; objective?: string; targetCount: number; context?: string }) => request<ApiCampaign>(`/projects/${projectId}/campaign`, { method: 'POST', body: JSON.stringify(body) }),
   generateStrategy: (campaignId: string) => request<ApiJob>(`/campaigns/${campaignId}/strategy/generate`, { method: 'POST' }),

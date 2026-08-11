@@ -9,6 +9,7 @@ export type ApiJob = {
 
 export type ApiProject = { id: string; name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string; currentStep: string; status: string };
 export type ApiCampaign = { id: string; projectId: string; name: string; objective: string; targetCount: number; context?: string };
+export type ApiStrategy = { campaignName: string; strategicObjective: string; rationale: string; contentMix: { pillar: string; percentage: number }[]; pillars: { id: string; name: string; description: string }[]; targetAudiences: string[]; messages: string[]; creativeDirection: { style: string[]; recommendations: string[]; avoid: string[] }; avoid: string[] };
 export type ApiIdea = { id: string; ordinal: number; title: string; pillar: string; contentType: string; description: string; selected: boolean };
 export type ApiContent = { id: string; sequence: number; headline: string; caption: string; cta?: string; visualDirection?: string; version: number };
 export type ApiBrandProfile = { visualIdentity: { colors?: { hex: string }[] }; voice: { traits?: string[]; avoid?: string[] }; audiences?: { name: string }[]; products?: { name: string }[]; contentAnalysis?: { recommendations?: string[] }; restrictions?: string[] };
@@ -43,6 +44,7 @@ export const api = {
   health: () => request<ApiHealth>('/health'),
   resetDemo: () => request<void>('/demo/reset', { method: 'POST' }),
   createProject: (body: { name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string }) => request<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(body) }),
+  project: (projectId: string) => request<ApiProject & { campaign?: ApiCampaign }>(`/projects/${projectId}`),
   uploadSources: (projectId: string, files: File[]) => { const form = new FormData(); files.forEach(file => form.append('files', file, file.name)); return upload(`/projects/${projectId}/sources`, form); },
   analyzeBrand: (projectId: string) => request<ApiJob>(`/projects/${projectId}/brand/analyze`, { method: 'POST' }),
   brand: (projectId: string) => request<ApiBrandProfile>(`/projects/${projectId}/brand`),
@@ -50,6 +52,7 @@ export const api = {
   approveBrand: (projectId: string) => request(`/projects/${projectId}/brand/approve`, { method: 'POST' }),
   createCampaign: (projectId: string, body: { name: string; objective?: string; targetCount: number; context?: string }) => request<ApiCampaign>(`/projects/${projectId}/campaign`, { method: 'POST', body: JSON.stringify(body) }),
   generateStrategy: (campaignId: string) => request<ApiJob>(`/campaigns/${campaignId}/strategy/generate`, { method: 'POST' }),
+  strategy: (campaignId: string) => request<ApiStrategy>(`/campaigns/${campaignId}/strategy`),
   approveStrategy: (campaignId: string) => request(`/campaigns/${campaignId}/strategy/approve`, { method: 'POST' }),
   generateIdeas: (campaignId: string) => request<ApiJob>(`/campaigns/${campaignId}/ideas/generate`, { method: 'POST' }),
   ideas: (campaignId: string) => request<ApiIdea[]>(`/campaigns/${campaignId}/ideas`),

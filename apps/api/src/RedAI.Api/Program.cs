@@ -108,7 +108,7 @@ static async Task<IResult> RunSynchronously(RedAIDbContext db, IServiceProvider 
     var job = new Job { Type = type, EntityType = entityType, EntityId = id, TotalSteps = total, Status = "running", Message = "Analisando" };
     db.Jobs.Add(job); await db.SaveChangesAsync(ct);
     try { await work(services, ct); job.Status = "completed"; job.Progress = 100; job.CompletedSteps = total; job.Message = "Concluído"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct); return Results.Ok(job); }
-    catch (Exception exception) { job.Status = "failed"; job.Error = exception.Message; job.Message = "Falhou"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct); return Results.Problem("Não foi possível mapear a identidade da marca.", statusCode: 502); }
+    catch (Exception exception) { services.GetRequiredService<ILoggerFactory>().CreateLogger("RedAI.BrandAnalysis").LogError(exception, "Synchronous job {JobId} failed", job.Id); job.Status = "failed"; job.Error = exception.Message; job.Message = "Falhou"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct); return Results.Problem("Não foi possível mapear a identidade da marca.", statusCode: 502, extensions: new Dictionary<string, object?> { ["jobId"] = job.Id }); }
 }
 static async Task<IResult> Delete(RedAIDbContext db, Project p) { db.Remove(p); await db.SaveChangesAsync(); return Results.NoContent(); }
 static async Task<IResult> DeleteSource(RedAIDbContext db, IAssetStorage storage, BrandSource s, CancellationToken ct) { if (s.StorageKey is not null) await storage.DeleteAsync(s.StorageKey, ct); db.Remove(s); await db.SaveChangesAsync(ct); return Results.NoContent(); }

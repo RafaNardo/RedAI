@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CampaignStrategy",
+  "type": "object",
+  "required": ["campaignName", "strategicObjective", "rationale", "contentMix", "pillars", "targetAudiences", "messages", "creativeDirection", "avoid"],
+  "properties": {
+    "campaignName": {"type": "string"},
+    "strategicObjective": {"type": "string"},
+    "rationale": {"type": "string"},
+    "contentMix": {"type": "array", "items": {"type": "object", "required": ["pillar", "percentage"], "properties": {"pillar": {"type": "string"}, "percentage": {"type": "integer", "minimum": 0, "maximum": 100}}}},
+    "pillars": {"type": "array", "items": {"type": "object", "required": ["id", "name", "description"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}}}},
+    "targetAudiences": {"type": "array", "items": {"type": "string"}},
+    "messages": {"type": "array", "items": {"type": "string"}},
+    "creativeDirection": {"type": "object", "required": ["style", "recommendations", "avoid"], "properties": {"style": {"type": "array", "items": {"type": "string"}}, "recommendations": {"type": "array", "items": {"type": "string"}}, "avoid": {"type": "array", "items": {"type": "string"}}}},
+    "avoid": {"type": "array", "items": {"type": "string"}}
+  }
+}

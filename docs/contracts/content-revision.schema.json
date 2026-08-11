@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContentRevision",
+  "type": "object",
+  "required": ["headline", "caption", "visualDirection"],
+  "properties": {
+    "headline": {"type": "string"},
+    "supportingText": {"type": ["string", "null"]},
+    "caption": {"type": "string"},
+    "cta": {"type": ["string", "null"]},
+    "hashtags": {"type": "array", "items": {"type": "string"}},
+    "visualDirection": {"type": "string"},
+    "changeSummary": {"type": ["string", "null"]},
+    "changedFields": {"type": "array", "items": {"type": "string"}}
+  }
+}

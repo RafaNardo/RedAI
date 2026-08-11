@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ContentIdeas",
+  "type": "object",
+  "required": ["ideas"],
+  "properties": {
+    "ideas": {
+      "type": "array",
+      "minItems": 30,
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "required": ["title", "hook", "description", "pillar", "contentType", "funnelStage", "creativeAngle", "score", "reason"],
+        "properties": {
+          "title": {"type": "string"},
+          "hook": {"type": "string"},
+          "description": {"type": "string"},
+          "pillar": {"type": "string"},
+          "contentType": {"type": "string"},
+          "funnelStage": {"type": "string"},
+          "creativeAngle": {"type": "string"},
+          "score": {"type": "number", "minimum": 0, "maximum": 1},
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}

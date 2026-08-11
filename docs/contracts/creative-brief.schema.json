@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CreativeBrief",
+  "type": "object",
+  "required": ["purpose", "template", "imageRequired", "imageDirection", "composition", "mood", "hierarchy", "avoid"],
+  "properties": {
+    "purpose": {"type": "string"},
+    "template": {"enum": ["editorial-bold", "minimal-center", "split-image", "statement", "educational", "promotional"]},
+    "imageRequired": {"type": "boolean"},
+    "imageDirection": {"type": "string"},
+    "composition": {"type": "string"},
+    "mood": {"type": "array", "items": {"type": "string"}},
+    "paletteRecommendation": {"type": "array", "items": {"type": "string"}},
+    "hierarchy": {"type": "array", "items": {"type": "string"}},
+    "logoPlacement": {"type": "string"},
+    "avoid": {"type": "array", "items": {"type": "string"}}
+  }
+}

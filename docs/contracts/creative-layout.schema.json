@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CreativeLayout",
+  "type": "object",
+  "required": ["template", "palette", "headline", "logo"],
+  "properties": {
+    "template": {"type": "string"},
+    "background": {"type": "object", "properties": {"type": {"type": "string"}, "assetKey": {"type": ["string", "null"]}}},
+    "palette": {"type": "object", "required": ["background", "primary", "accent"], "properties": {"background": {"type": "string"}, "primary": {"type": "string"}, "accent": {"type": "string"}}},
+    "headline": {"type": "object", "required": ["text", "alignment", "size"], "properties": {"text": {"type": "string"}, "alignment": {"enum": ["left", "center", "right"]}, "size": {"enum": ["md", "lg", "xl", "2xl"]}, "emphasis": {"type": "array", "items": {"type": "string"}}}},
+    "supporting": {"type": ["object", "null"]},
+    "cta": {"type": ["object", "null"]},
+    "logo": {"type": "object", "required": ["position"], "properties": {"position": {"type": "string"}}}
+  }
+}

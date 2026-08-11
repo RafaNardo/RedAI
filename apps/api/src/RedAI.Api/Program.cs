@@ -197,51 +197,58 @@ static async Task<IResult> GenerateRoutes(RedAIDbContext db, JobQueue jobs, Guid
 static async Task<IResult> SelectIdeas(RedAIDbContext db, Guid id, Guid[] ids) { if (ids.Distinct().Count() > 1) return Results.BadRequest(new { error = "Selecione uma única rota de campanha." }); var ideas = await db.ContentIdeas.Where(i => i.CampaignId == id).ToListAsync(); if (ideas.Count == 0 || ids.Any(x => ideas.All(i => i.Id != x))) return Results.BadRequest(new { error = "A rota precisa pertencer à campanha." }); foreach (var i in ideas) i.Selected = ids.Contains(i.Id); await db.SaveChangesAsync(); return Results.Ok(ideas.Where(i => i.Selected)); }
 static async Task<IResult> GenerateContent(RedAIDbContext db, JobQueue jobs, Guid id)
 {
-    var ideas = await db.ContentIdeas.Where(i => i.CampaignId == id && i.Selected).OrderBy(i => i.Ordinal).ToListAsync();
-    if (ideas.Count != 5) return Results.BadRequest(new { error = "A campanha precisa de exatamente 5 ideias selecionadas." });
+    var routes = await db.ContentIdeas.Where(route => route.CampaignId == id && route.Selected).OrderBy(route => route.Ordinal).ToListAsync();
+    if (routes.Count != 1) return Results.BadRequest(new { error = "A campanha precisa de exatamente uma rota selecionada." });
 
     return await Start(db, jobs, "content-generation", "campaign", id, 5, async (sp, ct) =>
     {
         var context = sp.GetRequiredService<RedAIDbContext>();
-        var selected = await context.ContentIdeas.Where(i => i.CampaignId == id && i.Selected).OrderBy(i => i.Ordinal).ToListAsync(ct);
+        var route = await context.ContentIdeas.SingleAsync(item => item.CampaignId == id && item.Selected, ct);
         var progressJob = await context.Jobs.Where(job => job.Type == "content-generation" && job.EntityType == "campaign" && job.EntityId == id && job.Status == "running").OrderByDescending(job => job.CreatedAt).FirstAsync(ct);
         var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+        var roles = new[] { "abertura da promessa", "educação prática", "prova de relevância", "aplicação no cotidiano", "convite para agir" };
 
-        async Task<GeneratedCopy> GenerateCopyAsync(ContentIdea idea)
+        async Task<GeneratedCopy> GenerateCopyAsync(int sequence)
         {
             using var copyScope = scopeFactory.CreateScope();
             var copyAi = copyScope.ServiceProvider.GetRequiredService<IAIClient>();
             if (copyAi.Mode == "mock")
-                return new GeneratedCopy(idea.Title, $"Proteção começa com escolhas bem informadas. {idea.Description}", null, "Fale com a equipe", "Editorial azul com fotografia humana", ["#proteção"]);
+                return new GeneratedCopy($"{route.Title}: post {sequence}", $"{route.Promise} {route.Description} Post {sequence} da série: {roles[sequence - 1]}.", null, "Fale com a equipe", route.VisualDirection ?? "Editorial humano e objetivo", ["#proteção"]);
 
             var copySchemas = copyScope.ServiceProvider.GetRequiredService<IContractSchemaCatalog>();
-            using var output = await copyAi.CompleteStructuredAsync(new StructuredTextRequest("content-generation", "Você é o ContentGenerator do RED AI. Crie copy social em português brasileiro para a ideia. Responda estritamente no schema.", new { idea.Title, idea.Pillar, idea.ContentType, idea.Description }, "content-revision", copySchemas.Load("content-revision")), ct);
+            using var output = await copyAi.CompleteStructuredAsync(new StructuredTextRequest(
+                "content-generation",
+                "Você é o ContentGenerator do RED AI. Crie uma única copy social em português brasileiro para um post estático da série de campanha. Os cinco posts devem ser complementares, sem repetir headline nem legenda. Não proponha carrossel, vídeo, reel, landing page, site ou múltiplos slides. Responda estritamente no schema.",
+                new { route = new { route.Title, route.Promise, route.TargetAudience, route.CreativeAngle, route.VisualDirection, route.Pillar, route.ContentType, route.Description }, series = new { postNumber = sequence, totalPosts = 5, editorialRole = roles[sequence - 1] } },
+                "content-revision", copySchemas.Load("content-revision")), ct);
             var copy = output.Deserialize<GeneratedCopy>() ?? throw new InvalidOperationException("ContentGenerator returned no copy.");
             if (string.IsNullOrWhiteSpace(copy.Headline) || string.IsNullOrWhiteSpace(copy.Caption) || string.IsNullOrWhiteSpace(copy.VisualDirection))
                 throw new InvalidOperationException("ContentGenerator returned an incomplete copy.");
             return copy;
         }
 
-        context.ContentItems.RemoveRange(context.ContentItems.Where(i => i.CampaignId == id));
+        context.ContentItems.RemoveRange(context.ContentItems.Where(item => item.CampaignId == id));
         await context.SaveChangesAsync(ct);
 
-        var pending = selected.Select((idea, index) => (idea, sequence: index + 1, copy: GenerateCopyAsync(idea))).ToList();
+        var pending = Enumerable.Range(1, 5).Select(sequence => (sequence, copy: GenerateCopyAsync(sequence))).ToList();
+        var headlines = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var completed = 0;
         while (pending.Count > 0)
         {
             var completedTask = await Task.WhenAny(pending.Select(item => item.copy));
             var index = pending.FindIndex(item => item.copy == completedTask);
-            var (idea, sequence, copyTask) = pending[index];
+            var (sequence, copyTask) = pending[index];
             pending.RemoveAt(index);
             var copy = await copyTask;
+            if (!headlines.Add(copy.Headline.Trim())) throw new InvalidOperationException("ContentGenerator returned duplicate headlines for the campaign series.");
 
-            var item = new ContentItem { CampaignId = id, SourceIdeaId = idea.Id, Sequence = sequence };
+            var item = new ContentItem { CampaignId = id, SourceIdeaId = route.Id, Sequence = sequence };
             context.ContentItems.Add(item);
             context.ContentRevisions.Add(new ContentRevision { ContentItemId = item.Id, Version = 1, Headline = copy.Headline, Caption = copy.Caption, SupportingText = copy.SupportingText, Cta = copy.Cta, VisualDirection = copy.VisualDirection, HashtagsJson = JsonSerializer.Serialize(copy.Hashtags) });
             completed++;
             progressJob.CompletedSteps = completed;
-            progressJob.Progress = completed * 100 / selected.Count;
-            progressJob.Message = $"Gerando conteúdo {completed} de {selected.Count}";
+            progressJob.Progress = completed * 100 / 5;
+            progressJob.Message = $"Gerando post {completed} de 5";
             await context.SaveChangesAsync(ct);
         }
     });

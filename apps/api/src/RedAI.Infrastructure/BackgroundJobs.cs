@@ -26,7 +26,21 @@ public sealed class JobWorker(IServiceScopeFactory scopes, JobQueue queue, ILogg
             var job = await db.Jobs.FindAsync([work.JobId], stoppingToken); if (job is null) continue;
             job.Status = "running"; job.Message = "Processando"; await db.SaveChangesAsync(stoppingToken);
             try { await work.Execute(scope.ServiceProvider, stoppingToken); job = await db.Jobs.FindAsync([work.JobId], stoppingToken); if (job is not null) { job.Status = "completed"; job.Progress = 100; job.CompletedSteps = job.TotalSteps; job.Message = "Concluído"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(stoppingToken); } }
-            catch (Exception ex) { logger.LogError(ex, "RED AI job {JobId} failed", work.JobId); job = await db.Jobs.FindAsync([work.JobId], stoppingToken); if (job is not null) { job.Status = "failed"; job.Error = ex.Message; job.Message = "Falhou"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(stoppingToken); } }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "RED AI job {JobId} failed", work.JobId);
+                using var failureScope = scopes.CreateScope();
+                var failureDb = failureScope.ServiceProvider.GetRequiredService<RedAIDbContext>();
+                var failedJob = await failureDb.Jobs.FindAsync([work.JobId], stoppingToken);
+                if (failedJob is not null)
+                {
+                    failedJob.Status = "failed";
+                    failedJob.Error = ex.Message;
+                    failedJob.Message = "Falhou";
+                    failedJob.CompletedAt = DateTimeOffset.UtcNow;
+                    await failureDb.SaveChangesAsync(stoppingToken);
+                }
+            }
         }
     }
 }

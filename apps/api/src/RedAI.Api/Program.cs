@@ -6,12 +6,13 @@ using RedAI.Infrastructure;
 using System.Text;
 using System.Text.Json;
 using System.IO.Compression;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<InMemoryCampaignStore>();
 builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddHostedService<JobWorker>();
-builder.Services.AddDbContext<RedAIDbContext>(o => o.UseNpgsql(builder.Configuration.GetConnectionString("Default") ?? "Host=localhost;Port=5432;Database=redai;Username=redai;Password=redai_dev"));
+builder.Services.AddDbContext<RedAIDbContext>(o => o.UseNpgsql(ResolveConnectionString(builder.Configuration)));
 builder.Services.AddScoped<IAssetStorage, LocalAssetStorage>();
 builder.Services.AddScoped<IAIRunWriter, EfAIRunWriter>();
 var bundledContracts = Path.Combine(builder.Environment.ContentRootPath, "contracts");
@@ -128,6 +129,23 @@ static async Task ApplyMigrationsWithRetryAsync(IServiceProvider services, ILogg
         catch (Exception exception) when (attempt < attempts) { logger.LogWarning(exception, "Database is not ready (attempt {Attempt}/{Attempts}); retrying.", attempt, attempts); await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken); }
     }
     throw new InvalidOperationException("The database did not become ready within the startup retry window.");
+}
+static string ResolveConnectionString(IConfiguration configuration)
+{
+    var configured = configuration.GetConnectionString("Default") ?? configuration["DATABASE_URL"];
+    if (string.IsNullOrWhiteSpace(configured)) return "Host=localhost;Port=5432;Database=redai;Username=redai;Password=redai_dev";
+    if (!Uri.TryCreate(configured, UriKind.Absolute, out var uri) || (uri.Scheme != "postgres" && uri.Scheme != "postgresql")) return configured;
+    var credentials = uri.UserInfo.Split(':', 2);
+    var builder = new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Database = uri.AbsolutePath.Trim('/'),
+        Username = Uri.UnescapeDataString(credentials[0]),
+        Password = credentials.Length > 1 ? Uri.UnescapeDataString(credentials[1]) : string.Empty,
+        SslMode = SslMode.Require
+    };
+    return builder.ConnectionString;
 }
 static byte[] CreateExportZip(Project project, Campaign campaign, IReadOnlyList<ContentItem> items, IReadOnlyList<CreativeVersion> creatives) { using var stream = new MemoryStream(); using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true)) { var manifest = archive.CreateEntry("campaign.json"); using (var writer = new StreamWriter(manifest.Open(), Encoding.UTF8)) writer.Write(JsonSerializer.Serialize(new { project = project.Name, campaign = campaign.Name, contentCount = items.Count, creativeCount = creatives.Count }, new JsonSerializerOptions { WriteIndented = true })); foreach (var creative in creatives) { var entry = archive.CreateEntry($"creatives/content-{creative.ContentItemId}/v{creative.Version}.json"); using var writer = new StreamWriter(entry.Open(), Encoding.UTF8); writer.Write(creative.LayoutJson); } } return stream.ToArray(); }
 public record CreateProject(string Name, string? InstagramHandle, string? WebsiteUrl, string? ManualContext);

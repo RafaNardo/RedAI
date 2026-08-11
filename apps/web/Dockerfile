@@ -7,6 +7,7 @@ RUN npm run build
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=build /app ./
+COPY --from=build /app/out ./out
+COPY apps/web/server.mjs ./server.mjs
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["node", "server.mjs"]

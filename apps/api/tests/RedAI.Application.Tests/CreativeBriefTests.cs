@@ -63,6 +63,62 @@ public sealed class CreativeBriefTests
         Assert.Contains("AUTHENTIC_ASSET_REQUIRED", modes);
     }
 
+    [Fact]
+    public void Guard_keeps_a_gym_educational_post_typographic_without_a_real_asset()
+    {
+        var decision = new CreativeAuthenticityGuard().Apply(CreateBrief() with
+        {
+            VisualMode = "TYPOGRAPHIC",
+            ImageDirection = "Fitness editorial typography"
+        }, []);
+
+        Assert.Equal("TYPOGRAPHIC", decision.Brief.VisualMode);
+        Assert.Null(decision.Metadata);
+    }
+
+    [Fact]
+    public void Guard_converts_a_missing_gym_location_asset_to_a_safe_fallback()
+    {
+        var decision = new CreativeAuthenticityGuard().Apply(CreateBrief() with
+        {
+            VisualMode = "AUTHENTIC_ASSET_REQUIRED",
+            RequiresAuthenticAsset = true,
+            AuthenticAssetReason = "The post asks to show the gym facility."
+        }, []);
+
+        Assert.Equal("TYPOGRAPHIC", decision.Brief.VisualMode);
+        Assert.False(decision.Brief.RequiresAuthenticAsset);
+        Assert.True(decision.Metadata!.AuthenticAssetRecommended);
+        Assert.Contains("gym facility", decision.Metadata.Reason);
+    }
+
+    [Fact]
+    public void Guard_allows_generic_lifestyle_when_it_does_not_claim_client_evidence()
+    {
+        var decision = new CreativeAuthenticityGuard().Apply(CreateBrief() with
+        {
+            VisualMode = "GENERIC_LIFESTYLE",
+            ImageRequired = true,
+            ImageDirection = "A neutral family at home, without signs or brands."
+        }, []);
+
+        Assert.Equal("GENERIC_LIFESTYLE", decision.Brief.VisualMode);
+        Assert.Null(decision.Metadata);
+    }
+
+    [Fact]
+    public void Final_image_prompt_includes_typographic_mode_and_density_constraints()
+    {
+        var layout = new CreativeLayout("editorial-bold", new CreativePalette("#111111", "#F6F6F3", "#FF3D1F"), new CreativeHeadline("Você treina. Mas não evolui?", "left", "2xl", []), new CreativeLogo("footer"), VisualMode: "TYPOGRAPHIC", VisualDensity: "LOW", NegativeSpaceTarget: 0.4m, MaxVisualElements: 3);
+
+        var prompt = CreativeImagePromptBuilder.Build(layout, "Bold fitness editorial", layout.Headline.Text, null, null);
+
+        Assert.Contains("TYPOGRAPHIC MODE", prompt);
+        Assert.Contains("40%", prompt);
+        Assert.Contains("no more than 3", prompt);
+        Assert.Contains("Never invent the client's physical establishment", prompt);
+    }
+
     private static CreativeBrief CreateBrief() => new(
         "Educational authority",
         "editorial-bold",

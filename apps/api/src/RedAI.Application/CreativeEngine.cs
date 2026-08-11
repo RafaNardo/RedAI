@@ -51,6 +51,52 @@ public sealed record CreativeBrief(
     }
 }
 
+public sealed record CreativeSourceDescriptor(string Type, string? Filename, string? MimeType)
+{
+    public bool IsExplicitAuthenticAsset => Type is "location" or "team" or "product" or "facility";
+}
+
+public sealed record CreativeAuthenticityMetadata(bool AuthenticAssetRecommended, string? Reason, string OriginalVisualMode);
+public sealed record CreativeAuthenticityDecision(CreativeBrief Brief, CreativeAuthenticityMetadata? Metadata);
+
+/// <summary>
+/// Keeps visual concepts from presenting an invented business, team, facility or
+/// product as if it were evidence supplied by the client.
+/// </summary>
+public sealed class CreativeAuthenticityGuard
+{
+    public CreativeAuthenticityDecision Apply(CreativeBrief brief, IEnumerable<CreativeSourceDescriptor> sources)
+    {
+        brief.Validate();
+        var needsAuthenticAsset = brief.RequiresAuthenticAsset || brief.VisualMode == "AUTHENTIC_ASSET_REQUIRED";
+        if (!needsAuthenticAsset) return new CreativeAuthenticityDecision(brief, null);
+
+        // The current image-generation integration does not pass a client image
+        // into an edit request. Even an explicitly classified asset must therefore
+        // not be silently replaced by an invented scene.
+        var hasExplicitAsset = sources.Any(source => source.IsExplicitAuthenticAsset);
+        var reason = brief.AuthenticAssetReason
+            ?? "A imagem proposta representa uma evidência real da marca e requer um asset autêntico.";
+        if (hasExplicitAsset)
+            reason = $"{reason} O asset autêntico foi identificado, mas ainda não é enviado ao gerador de imagem final.";
+
+        var fallback = brief with
+        {
+            VisualMode = "TYPOGRAPHIC",
+            RequiresAuthenticAsset = false,
+            AuthenticAssetReason = reason,
+            ImageRequired = false,
+            ImageDirection = "Typography-led editorial composition. No people, location, facility, product or literal scene.",
+            Composition = "One dominant headline, restrained brand structure and generous negative space.",
+            VisualDensity = "LOW",
+            NegativeSpaceTarget = 0.4m,
+            MaxVisualElements = 3
+        };
+        fallback.Validate();
+        return new CreativeAuthenticityDecision(fallback, new CreativeAuthenticityMetadata(true, reason, brief.VisualMode));
+    }
+}
+
 public sealed record CreativePalette(string Background, string Primary, string Accent);
 public sealed record CreativeHeadline(string Text, string Alignment, string Size, IReadOnlyList<string> Emphasis);
 public sealed record CreativeLogo(string Position);
@@ -61,7 +107,56 @@ public sealed record CreativeLayout(
     CreativeLogo Logo,
     string? SupportingText = null,
     string? Cta = null,
-    string? BackgroundAssetKey = null);
+    string? BackgroundAssetKey = null,
+    string VisualMode = "TYPOGRAPHIC",
+    string VisualDensity = "LOW",
+    decimal NegativeSpaceTarget = 0.4m,
+    int MaxVisualElements = 3,
+    CreativeAuthenticityMetadata? Authenticity = null);
+
+public static class CreativeImagePromptBuilder
+{
+    public static string Build(CreativeLayout layout, string? visualDirection, string headline, string? supportingText, string? cta, string? revisionInstruction = null)
+    {
+        var revisionContext = string.IsNullOrWhiteSpace(revisionInstruction) ? string.Empty : $"\nApply this visual revision faithfully: {revisionInstruction}\n";
+        var negativeSpacePercent = (layout.NegativeSpaceTarget * 100).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        var modeRules = layout.VisualMode switch
+        {
+            "TYPOGRAPHIC" => "TYPOGRAPHIC MODE: Photography is prohibited. Use typography, color, spacing and subtle graphic structure only. No people, locations or literal objects. Treat it as a premium editorial poster, never an infographic.",
+            "ABSTRACT" => "ABSTRACT MODE: Do not depict a literal place. Use restrained light, texture, shape, depth or conceptual graphics. Keep abstraction secondary to the communication hierarchy; avoid futuristic AI aesthetics unless the brand clearly requires it.",
+            "GENERIC_LIFESTYLE" => "GENERIC LIFESTYLE MODE: The scene represents a generic concept only, never the client's actual location, staff or customers. Use a neutral non-identifiable environment with no third-party branding or signage.",
+            "PRODUCT" => "PRODUCT MODE: Do not invent a client product. Use only an authentic supplied product asset; otherwise keep the composition typography-led and abstract.",
+            _ => "AUTHENTIC ASSET REQUIRED: Do not depict a real-world location, facility, team, product or customer. Use a typography-led abstract fallback."
+        };
+
+        return $"""
+Create one polished final 4:5 portrait Instagram feed PNG for a Brazilian professional brand. This is a finished commercial creative, not a wireframe or background.
+
+STYLE
+Modern editorial advertising. Premium, minimal, sophisticated, intentional and commercially usable. Strong hierarchy, clean Portuguese accent rendering, correct line wrapping and safe margins.
+
+VISUAL DENSITY
+{layout.VisualDensity}. Reserve approximately {negativeSpacePercent}% intentional negative space. Use one dominant visual idea and no more than {layout.MaxVisualElements} major visual elements, including the headline. Empty space is intentional; never fill it with decoration.
+
+STRICTLY AVOID
+Collages, multiple panels, floating cards, stickers, badges, unnecessary icons, arrows, random ornaments, fake UI, dashboards, fake statistics, extra labels, excessive gradients, glow, shadows, multiple photographs, noisy backgrounds, watermarks, third-party branding and RED AI branding.
+
+AUTHENTICITY
+Never invent the client's physical establishment, interior, staff, customers, facilities, equipment or branded product. If there is no authentic asset, use typography, abstraction or neutral conceptual imagery instead.
+
+{modeRules}
+
+Template intent: {layout.Template}
+Palette: one dominant color {layout.Palette.Background}; supporting color {layout.Palette.Primary}; accent {layout.Palette.Accent}
+Art direction: {visualDirection ?? "Use the approved brand visual language."}
+{revisionContext}
+Render only this exact Portuguese copy. Do not add words, claims, labels, slogans or CTAs:
+HEADLINE: {headline}
+SUPPORTING TEXT: {supportingText ?? "(omit)"}
+CTA: {cta ?? "(omit)"}
+""";
+    }
+}
 
 public sealed record CreativeRevisionAction(string Type, string Instruction, JsonElement? Changes = null);
 public sealed record CreativeRevisionPlan(string Summary, IReadOnlyList<CreativeRevisionAction> Actions)

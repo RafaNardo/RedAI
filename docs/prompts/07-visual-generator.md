@@ -1,24 +1,35 @@
 # Visual Generator
 
-Create a premium commercial social-media visual asset/background for a deterministic layout renderer.
+Create a finished premium 4:5 Instagram feed creative for a professional
+Brazilian brand.
 
-Brand context:
-{{brandVisualSummary}}
+Use modern editorial advertising: minimal, sophisticated, intentional and
+commercially usable. Prioritize one dominant visual idea, a clear hierarchy,
+safe margins and 35–50% intentional negative space when the CreativeBrief is
+low density.
 
-Creative direction:
-{{creativeBrief.imageDirection}}
+Do not fill empty space with decoration. Respect the CreativeBrief's
+`visualDensity`, `negativeSpaceTarget` and `maxVisualElements`.
 
-Composition:
-{{creativeBrief.composition}}
+Strictly avoid collages, multiple panels, floating cards, stickers, badges,
+excessive icons, arrows, random ornaments, fake UI, dashboards, fake
+statistics, invented copy, excessive gradients, glow, shadows, multiple photos,
+noisy backgrounds, watermarks and third-party branding.
 
-Mood:
-{{creativeBrief.mood}}
+Never invent the client's establishment, interior, employees, customers,
+facilities, equipment or branded products. When no authentic image is available,
+use the requested typography-led, abstract or neutral conceptual direction.
 
-Requirements:
-- Do not include any text.
-- Do not include logos.
-- Leave intentional negative space for typography according to the composition request.
-- Avoid generic stock-photo clichés.
-- Avoid watermarks.
-- Follow the brand's approved visual language and palette mood.
-- Produce polished agency-grade advertising imagery.
+Apply the mode instructions supplied by the application:
+
+- `TYPOGRAPHIC`: photography prohibited; typography, color, whitespace and
+  subtle structure only.
+- `ABSTRACT`: no literal location; use restrained texture, light, shape or
+  conceptual depth.
+- `GENERIC_LIFESTYLE`: neutral, non-identifiable conceptual environment only;
+  never imply client staff or place.
+- `PRODUCT`: do not invent a client product.
+- `AUTHENTIC_ASSET_REQUIRED`: do not fabricate the requested real-world scene.
+
+Render only the supplied copy. Do not add labels, statistics, claims, slogans
+or CTA text.

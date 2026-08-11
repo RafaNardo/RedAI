@@ -16,6 +16,7 @@ builder.Services.AddSingleton<JobQueue>();
 builder.Services.AddHostedService<JobWorker>();
 builder.Services.AddDbContext<RedAIDbContext>(o => o.UseNpgsql(ResolveConnectionString(builder.Configuration)));
 builder.Services.AddScoped<IAssetStorage, LocalAssetStorage>();
+builder.Services.AddSingleton<CreativeAuthenticityGuard>();
 builder.Services.AddScoped<IAIRunWriter, EfAIRunWriter>();
 var bundledContracts = Path.Combine(builder.Environment.ContentRootPath, "contracts");
 var repositoryContracts = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "..", "..", "docs", "contracts"));
@@ -292,11 +293,15 @@ static async Task MaterializeCreatives(RedAIDbContext db, IServiceScopeFactory s
         var schemas = renderScope.ServiceProvider.GetRequiredService<IContractSchemaCatalog>();
         var storage = renderScope.ServiceProvider.GetRequiredService<IAssetStorage>();
         var renderer = renderScope.ServiceProvider.GetRequiredService<IDeterministicCreativeRenderer>();
+        var guard = renderScope.ServiceProvider.GetRequiredService<CreativeAuthenticityGuard>();
         var brief = await CreateCreativeBrief(ai, schemas, campaign, revision, item.Sequence, palette, ct);
+        var authenticity = guard.Apply(brief, (await context.BrandSources.Where(source => source.ProjectId == campaign.ProjectId).ToListAsync(ct))
+            .Select(source => new CreativeSourceDescriptor(source.Type, source.OriginalFilename, source.MimeType)));
+        brief = authenticity.Brief;
         // In OpenAI mode the image model owns the final composition. A separate
         // background generation would be unused and would double both cost and latency.
         var asset = ai.Mode == "openai" ? null : brief.ImageRequired ? await GenerateVisualAsset(ai, storage, campaign.ProjectId, item.Id, 1, brief.ImageDirection, ct) : null;
-        var layout = new CreativeLayout(brief.Template, palette, new CreativeHeadline(revision.Headline, brief.Template is "minimal-center" or "statement" ? "center" : "left", brief.Template is "editorial-bold" or "statement" ? "2xl" : "xl", []), new CreativeLogo(brief.LogoPlacement), revision.SupportingText, revision.Cta, asset);
+        var layout = new CreativeLayout(brief.Template, palette, new CreativeHeadline(revision.Headline, brief.Template is "minimal-center" or "statement" ? "center" : "left", brief.Template is "editorial-bold" or "statement" ? "2xl" : "xl", []), new CreativeLogo(brief.LogoPlacement), revision.SupportingText, revision.Cta, asset, brief.VisualMode, brief.VisualDensity, brief.NegativeSpaceTarget, brief.MaxVisualElements, authenticity.Metadata);
         var key = $"projects/{campaign.ProjectId}/content/{item.Id}/creatives/v1/final.png";
         if (ai.Mode == "openai") await GenerateFinalCreativeAsset(ai, storage, campaign.ProjectId, item.Id, 1, revision, layout, null, key, ct);
         else await renderer.RenderPngAsync(new DeterministicCreativeRenderRequest(layout, key), ct);
@@ -318,32 +323,13 @@ static async Task MaterializeCreatives(RedAIDbContext db, IServiceScopeFactory s
         await db.SaveChangesAsync(ct);
     }
 }
-static async Task<CreativeBrief> CreateCreativeBrief(IAIClient ai, IContractSchemaCatalog schemas, Campaign campaign, ContentRevision revision, int sequence, CreativePalette palette, CancellationToken ct) { if (ai.Mode == "mock") return new CreativeBrief("Comunicação de marca", (sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }, false, "Sem imagem gerada", "Tipografia editorial", ["claro"], [palette.Background, palette.Primary, palette.Accent], ["headline", "apoio", "cta"], "rodapé", ["texto em imagem"], "TYPOGRAPHIC", false, null, "LOW", 0.4m, 3); using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("creative-brief", "Você é o Creative Director do RED AI. Crie um brief visual para o post social final. A geração final pode renderizar a tipografia, mas o brief deve definir a hierarquia, paleta, composição e direção de arte, sem inventar texto adicional. Responda estritamente no schema.", new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, content = new { revision.Headline, revision.SupportingText, revision.Caption, revision.Cta, revision.VisualDirection }, palette }, "creative-brief", schemas.Load("creative-brief")), ct); var brief = output.Deserialize<CreativeBrief>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("Creative Director returned no brief."); brief.Validate(); return brief; }
+static async Task<CreativeBrief> CreateCreativeBrief(IAIClient ai, IContractSchemaCatalog schemas, Campaign campaign, ContentRevision revision, int sequence, CreativePalette palette, CancellationToken ct) { if (ai.Mode == "mock") return new CreativeBrief("Comunicação de marca", (sequence % 6) switch { 0 => "promotional", 1 => "editorial-bold", 2 => "minimal-center", 3 => "split-image", 4 => "statement", _ => "educational" }, false, "Sem imagem gerada", "Tipografia editorial", ["claro"], [palette.Background, palette.Primary, palette.Accent], ["headline", "apoio", "cta"], "rodapé", ["texto em imagem"], "TYPOGRAPHIC", false, null, "LOW", 0.4m, 3); using var output = await ai.CompleteStructuredAsync(new StructuredTextRequest("creative-brief", "Você é o Creative Director do RED AI e deve agir como diretor de arte de uma agência premium. Prefira uma ideia visual forte, tipografia, composição editorial e espaço negativo a decoração. Nunca invente estabelecimento, interior, equipe, cliente, instalação, equipamento ou produto como se pertencesse à marca. Se o conteúdo precisar mostrar uma evidência real sem asset autêntico, use AUTHENTIC_ASSET_REQUIRED e justifique; quando possível, prefira TYPOGRAPHIC ou ABSTRACT. Default: visualDensity LOW, negativeSpaceTarget entre .35 e .50 e maxVisualElements 3. Evite colagens, cards flutuantes, stickers, ícones e detalhes decorativos. Mantenha o texto da arte curto e não invente fatos. Responda estritamente no schema.", new { campaign = new { campaign.Name, campaign.Objective, campaign.Context }, content = new { revision.Headline, revision.SupportingText, revision.Caption, revision.Cta, revision.VisualDirection }, palette }, "creative-brief", schemas.Load("creative-brief")), ct); var brief = output.Deserialize<CreativeBrief>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidOperationException("Creative Director returned no brief."); brief.Validate(); return brief; }
 static async Task<string?> GenerateVisualAsset(IAIClient ai, IAssetStorage storage, Guid projectId, Guid contentItemId, int version, string direction, CancellationToken ct) { if (ai.Mode != "openai") return null; var prompt = $"Create a premium editorial background photograph for a Brazilian brand social post. Direction: {direction}. No text, no lettering, no typography, no words, no logo, no brand mark, no watermark, no signature, no UI, no borders. Leave clear negative space for a separate renderer to add copy."; var key = $"projects/{projectId}/content/{contentItemId}/visuals/v{version}/background.png"; return (await new VisualAssetGenerator(ai, storage).GenerateAndStoreAsync(new ImageGenerationRequest("creative-visual", prompt), key, ct)).Asset.StorageKey; }
 static async Task GenerateFinalCreativeAsset(IAIClient ai, IAssetStorage storage, Guid projectId, Guid contentItemId, int version, ContentRevision revision, CreativeLayout layout, string? revisionInstruction, string key, CancellationToken ct)
 {
     if (ai.Mode != "openai") throw new InvalidOperationException("Final AI creative rendering requires AI_MODE=openai.");
 
-    var revisionContext = string.IsNullOrWhiteSpace(revisionInstruction)
-        ? ""
-        : $"\nApply this visual revision faithfully: {revisionInstruction}\n";
-    var prompt = $"""
-Create one polished final 4:5 portrait social-media PNG for a Brazilian brand. This is a finished commercial creative, not a wireframe or a background.
-
-Use modern editorial typography, excellent Portuguese accent rendering, clean line wrapping, safe margins, strong visual hierarchy and generous contrast. Use the supplied brand palette and art direction. The headline is the dominant element; supporting text and CTA are secondary. Compose the visual around the exact content below.
-
-Do not add any words beyond the supplied copy. Do not invent a logo, brand mark, watermark, signature, UI chrome, border, phone frame, or RED AI branding. Do not use placeholder or gibberish text.
-""" + $"""
-
-Template intent: {layout.Template}
-Palette: background {layout.Palette.Background}; primary {layout.Palette.Primary}; accent {layout.Palette.Accent}
-Art direction: {revision.VisualDirection}
-{revisionContext}
-Render only this exact Portuguese copy, preserving spelling, accents, punctuation and meaning:
-HEADLINE: {revision.Headline}
-SUPPORTING TEXT: {revision.SupportingText ?? "(omit)"}
-CTA: {revision.Cta ?? "(omit)"}
-""";
+    var prompt = CreativeImagePromptBuilder.Build(layout, revision.VisualDirection, revision.Headline, revision.SupportingText, revision.Cta, revisionInstruction);
 
     await new VisualAssetGenerator(ai, storage).GenerateAndStoreAsync(
         new ImageGenerationRequest("final-creative", prompt, "1024x1536", "high"), key, ct);

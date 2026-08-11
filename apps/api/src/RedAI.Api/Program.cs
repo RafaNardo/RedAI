@@ -58,7 +58,7 @@ api.MapPost("/projects/{id:guid}/sources", async (Guid id, HttpRequest request, 
 api.MapGet("/projects/{id:guid}/sources", async (Guid id, RedAIDbContext db) => !await db.Projects.AnyAsync(p => p.Id == id) ? Results.NotFound() : Results.Ok(await db.BrandSources.Where(s => s.ProjectId == id).OrderBy(s => s.CreatedAt).ToListAsync()));
 api.MapDelete("/projects/{id:guid}/sources/{sourceId:guid}", async (Guid id, Guid sourceId, RedAIDbContext db, IAssetStorage storage, CancellationToken ct) => await db.BrandSources.FirstOrDefaultAsync(s => s.Id == sourceId && s.ProjectId == id, ct) is not { } source ? Results.NotFound() : await DeleteSource(db, storage, source, ct));
 
-api.MapPost("/projects/{id:guid}/brand/analyze", async (Guid id, RedAIDbContext db, JobQueue jobs) => !await db.Projects.AnyAsync(p => p.Id == id) ? Results.NotFound() : await Start(db, jobs, "brand-analysis", "project", id, 1, async (sp, ct) => await MaterializeBrand(sp.GetRequiredService<RedAIDbContext>(), sp.GetRequiredService<IAIClient>(), sp.GetRequiredService<IContractSchemaCatalog>(), id, ct)));
+api.MapPost("/projects/{id:guid}/brand/analyze", async (Guid id, RedAIDbContext db, IServiceProvider services, CancellationToken ct) => !await db.Projects.AnyAsync(p => p.Id == id, ct) ? Results.NotFound() : await RunSynchronously(db, services, "brand-analysis", "project", id, 1, async (sp, token) => await MaterializeBrand(sp.GetRequiredService<RedAIDbContext>(), sp.GetRequiredService<IAIClient>(), sp.GetRequiredService<IContractSchemaCatalog>(), id, token), ct));
 api.MapGet("/projects/{id:guid}/brand", async (Guid id, RedAIDbContext db) => await db.BrandProfiles.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectId == id) is { } b ? Results.Content(b.ProfileJson, "application/json") : Results.NotFound());
 api.MapPut("/projects/{id:guid}/brand", async (Guid id, JsonElement profile, RedAIDbContext db) => await SaveBrand(db, id, profile.GetRawText()));
 api.MapPost("/projects/{id:guid}/brand/approve", async (Guid id, RedAIDbContext db) => await ApproveBrand(db, id));
@@ -102,6 +102,13 @@ static async Task<IResult> Start(RedAIDbContext db, JobQueue queue, string type,
     var job = new Job { Type = type, EntityType = entityType, EntityId = id, TotalSteps = total, Message = "Na fila" };
     db.Jobs.Add(job); await db.SaveChangesAsync(); await queue.EnqueueAsync(new QueuedJob(job.Id, work));
     return Results.Accepted($"/api/jobs/{job.Id}", job);
+}
+static async Task<IResult> RunSynchronously(RedAIDbContext db, IServiceProvider services, string type, string entityType, Guid id, int total, Func<IServiceProvider, CancellationToken, Task> work, CancellationToken ct)
+{
+    var job = new Job { Type = type, EntityType = entityType, EntityId = id, TotalSteps = total, Status = "running", Message = "Analisando" };
+    db.Jobs.Add(job); await db.SaveChangesAsync(ct);
+    try { await work(services, ct); job.Status = "completed"; job.Progress = 100; job.CompletedSteps = total; job.Message = "Concluído"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct); return Results.Ok(job); }
+    catch (Exception exception) { job.Status = "failed"; job.Error = exception.Message; job.Message = "Falhou"; job.CompletedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct); return Results.Problem("Não foi possível mapear a identidade da marca.", statusCode: 502); }
 }
 static async Task<IResult> Delete(RedAIDbContext db, Project p) { db.Remove(p); await db.SaveChangesAsync(); return Results.NoContent(); }
 static async Task<IResult> DeleteSource(RedAIDbContext db, IAssetStorage storage, BrandSource s, CancellationToken ct) { if (s.StorageKey is not null) await storage.DeleteAsync(s.StorageKey, ct); db.Remove(s); await db.SaveChangesAsync(ct); return Results.NoContent(); }

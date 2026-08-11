@@ -40,6 +40,7 @@ async function upload<T>(path: string, body: FormData): Promise<T> {
 
 export const api = {
   health: () => request<ApiHealth>('/health'),
+  resetDemo: () => request<void>('/demo/reset', { method: 'POST' }),
   createProject: (body: { name: string; instagramHandle?: string; websiteUrl?: string; manualContext?: string }) => request<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(body) }),
   uploadSources: (projectId: string, files: File[]) => { const form = new FormData(); files.forEach(file => form.append('files', file, file.name)); return upload(`/projects/${projectId}/sources`, form); },
   analyzeBrand: (projectId: string) => request<ApiJob>(`/projects/${projectId}/brand/analyze`, { method: 'POST' }),

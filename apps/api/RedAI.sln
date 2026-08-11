@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Api", "src\RedAI.Api\RedAI.Api.csproj", "{A84DA0D3-9AAE-4EB0-B2A0-D015A7031964}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Application", "src\RedAI.Application\RedAI.Application.csproj", "{1B0E6801-3615-4C92-8626-CCEC5395A2D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Domain", "src\RedAI.Domain\RedAI.Domain.csproj", "{5A77BEBC-2E87-45D0-A1E1-1FB828D8C825}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedAI.Infrastructure", "src\RedAI.Infrastructure\RedAI.Infrastructure.csproj", "{8C290286-3559-47DE-A456-8FD71D90DDFB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A84DA0D3-9AAE-4EB0-B2A0-D015A7031964}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A84DA0D3-9AAE-4EB0-B2A0-D015A7031964}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A84DA0D3-9AAE-4EB0-B2A0-D015A7031964}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A84DA0D3-9AAE-4EB0-B2A0-D015A7031964}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1B0E6801-3615-4C92-8626-CCEC5395A2D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1B0E6801-3615-4C92-8626-CCEC5395A2D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1B0E6801-3615-4C92-8626-CCEC5395A2D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1B0E6801-3615-4C92-8626-CCEC5395A2D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5A77BEBC-2E87-45D0-A1E1-1FB828D8C825}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A77BEBC-2E87-45D0-A1E1-1FB828D8C825}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A77BEBC-2E87-45D0-A1E1-1FB828D8C825}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A77BEBC-2E87-45D0-A1E1-1FB828D8C825}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8C290286-3559-47DE-A456-8FD71D90DDFB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -39,7 +39,7 @@ Fluxo principal:
 - Banco: PostgreSQL
 - AI: OpenAI Responses API + geração/edição de imagem
 - Storage: `IAssetStorage`, Local no dev e S3-compatible depois
-- Infra local: Docker Compose
+- Infra local: Podman Compose
 
 ## Regra principal
 

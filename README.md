@@ -5,6 +5,7 @@ MVP web para transformar uma marca em uma campanha social completa, revisável e
 ## Executar
 
 ```powershell
+cd apps/web
 npm install
 npm run dev
 ```
@@ -14,6 +15,7 @@ Abra `http://localhost:3000`. O fluxo é persistido no navegador para que projet
 ## Qualidade
 
 ```powershell
+cd apps/web
 npm run lint
 npm run test
 npm run build
@@ -25,14 +27,18 @@ O app inclui manifest, ícone, service worker e cache do shell. Em um navegador 
 
 ## IA e segredos
 
-`AI_MODE=mock` é o padrão desta entrega. Não adicione chaves ao `.env` nem ao frontend. Quando a API ASP.NET Core for adicionada, configure a chave somente no ambiente de desenvolvimento:
+`AI_MODE=mock` é o padrão desta entrega. Não adicione chaves ao `.env` nem ao frontend. Configure a chave somente no ambiente de desenvolvimento da API:
 
 ```powershell
-dotnet user-secrets set "ai-api-key" "sua-chave" --project src/RedAI.Api
+dotnet user-secrets set "ai-api-key" "sua-chave" --project apps/api/src/RedAI.Api
 ```
 
 O nome do segredo deve ser mapeado no backend para o cliente de IA, sem nunca ser enviado como `NEXT_PUBLIC_*`.
 
 ## Containers
 
-O projeto deve ser executado com Podman, não Docker. A futura camada .NET/PostgreSQL pode usar o arquivo de exemplo em `docs/config` com `podman compose`; a interface atual não requer containers.
+O projeto é executado com Podman, não Docker:
+
+```powershell
+podman compose -f compose.yml up --build
+```

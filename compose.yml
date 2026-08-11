@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_DB: redai
+      POSTGRES_USER: redai
+      POSTGRES_PASSWORD: redai_dev
+    ports: ["5432:5432"]
+    volumes: [redai-postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redai -d redai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/src/RedAI.Api/Dockerfile
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=redai;Username=redai;Password=redai_dev
+      AI__Mode: mock
+      ASSET_STORAGE_PATH: /data/assets
+    ports: ["5080:8080"]
+    volumes: [redai-assets:/data/assets]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:5080/api
+    ports: ["3000:3000"]
+    depends_on:
+      api:
+        condition: service_started
+volumes:
+  redai-postgres:
+  redai-assets:

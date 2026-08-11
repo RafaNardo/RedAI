@@ -23,7 +23,7 @@ Clean run, seeds, regression, P0/P1 fixes, runbook validation.
 
 Orchestrator:
 - bootstrap repo
-- Docker Compose
+- Podman Compose
 - database connection/migrations base
 - domain entities
 - canonical DTOs/contracts

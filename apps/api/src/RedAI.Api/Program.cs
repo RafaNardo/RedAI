@@ -21,7 +21,7 @@ var bundledContracts = Path.Combine(builder.Environment.ContentRootPath, "contra
 var repositoryContracts = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "..", "..", "docs", "contracts"));
 builder.Services.AddSingleton<IContractSchemaCatalog>(_ => new FileContractSchemaCatalog(Directory.Exists(bundledContracts) ? bundledContracts : repositoryContracts));
 builder.Services.AddScoped<IDeterministicCreativeRenderer, PngCreativeRenderer>();
-builder.Services.AddHttpClient<OpenAIResponsesClient>();
+builder.Services.AddHttpClient<OpenAIResponsesClient>(client => client.Timeout = TimeSpan.FromMinutes(5));
 builder.Services.AddHttpClient("brand-website");
 builder.Services.AddSingleton<MockAIClient>();
 builder.Services.AddScoped<IAIClient>(services => string.Equals(builder.Configuration["AI:Mode"] ?? Environment.GetEnvironmentVariable("AI_MODE"), "openai", StringComparison.OrdinalIgnoreCase)
